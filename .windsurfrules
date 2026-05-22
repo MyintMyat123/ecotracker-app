@@ -1,0 +1,28 @@
+# EcoTracker Project Rules
+
+This is a full-stack project consisting of a Laravel API backend and a React frontend.
+
+## Project Structure
+- `ecotracker-api/`: Backend Laravel 13 API (PHP 8.3).
+- `ecotracker-ui/`: Frontend React 19 application (TypeScript, Vite, Tailwind CSS 4).
+
+## General Workflow
+- Always verify the directory before running commands (e.g., run `artisan` only in `ecotracker-api/`, and `npm` commands only in `ecotracker-ui/`).
+- Maintain a clean separation of concerns between the frontend and backend.
+- Write modular, readable, and maintainable code.
+- Prefer self-documenting code with descriptive variable and function names.
+
+## Backend Guidelines (`ecotracker-api`)
+- **Framework & Language**: Laravel 13, PHP 8.3.
+- **Typing**: Use strict typing, including property types, parameter types, and return types.
+- **Architecture**: Follow Laravel best practices (thin controllers, Form Requests for validation, Eloquent API Resources for responses, and Services/Actions for business logic).
+- **Authentication**: Uses Laravel Sanctum.
+- **Database**: Use migrations and seeders for database schema and initial data. Use Eloquent ORM.
+
+## Frontend Guidelines (`ecotracker-ui`)
+- **Framework & Language**: React 19, TypeScript.
+- **Build Tool**: Vite 8.
+- **Styling**: Tailwind CSS 4. Utilize utility classes instead of custom CSS where possible.
+- **Components**: Write functional components and use React Hooks.
+- **Typing**: Avoid `any`. Define proper Interfaces or Types for all props, state, and API responses.
+- **State Management**: Keep local state close to where it's used. Manage global state effectively if required.
