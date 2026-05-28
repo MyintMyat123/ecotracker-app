@@ -150,6 +150,8 @@ class SpeciesService
     public function getOccurrences(int $usageKey, int $limit = 20): array
     {
         try {
+            $limit = max(1, min($limit, 500));
+
             $response = Http::get("{$this->baseUrl}/occurrence/search", [
                 'taxonKey' => $usageKey,
                 'basisOfRecord' => 'HUMAN_OBSERVATION',
@@ -158,7 +160,7 @@ class SpeciesService
             ]);
 
             if ($response->successful()) {
-                return $response->json()['results'] ?? [];
+                return $this->cleanOccurrences($response->json()['results'] ?? []);
             }
 
             Log::error("GBIF API occurrence search failed: " . $response->body());
@@ -167,6 +169,53 @@ class SpeciesService
             Log::error("Exception during GBIF API occurrence search: " . $e->getMessage());
             return [];
         }
+    }
+
+    /**
+     * Convert verbose GBIF occurrence records into validated map points.
+     *
+     * @param array $records
+     * @return array
+     */
+    private function cleanOccurrences(array $records): array
+    {
+        $cleaned = [];
+
+        foreach ($records as $record) {
+            $latitude = $record['decimalLatitude'] ?? null;
+            $longitude = $record['decimalLongitude'] ?? null;
+
+            if (!$this->hasValidCoordinates($latitude, $longitude)) {
+                continue;
+            }
+
+            $key = $record['key'] ?? null;
+
+            $cleaned[] = [
+                'key' => $key,
+                'latitude' => (float) $latitude,
+                'longitude' => (float) $longitude,
+                'eventDate' => $record['eventDate'] ?? null,
+                'country' => $record['country'] ?? 'Unknown',
+                'locality' => $record['locality'] ?? 'Unknown',
+                'basisOfRecord' => $record['basisOfRecord'] ?? 'HUMAN_OBSERVATION',
+                'gbifUrl' => $key ? "https://www.gbif.org/occurrence/{$key}" : null,
+            ];
+        }
+
+        return $cleaned;
+    }
+
+    private function hasValidCoordinates(mixed $latitude, mixed $longitude): bool
+    {
+        if (!is_numeric($latitude) || !is_numeric($longitude)) {
+            return false;
+        }
+
+        $latitude = (float) $latitude;
+        $longitude = (float) $longitude;
+
+        return $latitude >= -90 && $latitude <= 90 && $longitude >= -180 && $longitude <= 180;
     }
 
     /**

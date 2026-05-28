@@ -13,12 +13,14 @@ L.Icon.Default.mergeOptions({
 });
 
 interface Occurrence {
-  key: number;
-  decimalLatitude: number;
-  decimalLongitude: number;
-  eventDate: string;
+  key: number | null;
+  latitude: number;
+  longitude: number;
+  eventDate: string | null;
   country: string;
   locality: string;
+  basisOfRecord: string;
+  gbifUrl: string | null;
 }
 
 interface SpeciesMapProps {
@@ -64,7 +66,7 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({ taxonKey, scientificName }) => 
   };
 
   return (
-    <div className="h-[500px] w-full rounded-2xl overflow-hidden border border-slate-800 shadow-2xl relative mt-8">
+    <div className="h-[620px] md:h-[720px] w-full rounded-[1.75rem] overflow-hidden border border-white/8 shadow-2xl relative bg-slate-950">
       {loading && (
         <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm z-[1000] flex items-center justify-center">
           <div className="flex flex-col items-center gap-4">
@@ -74,7 +76,7 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({ taxonKey, scientificName }) => 
         </div>
       )}
       
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] bg-slate-900/90 backdrop-blur-md px-4 py-2 rounded-full border border-slate-700 text-xs font-medium text-slate-300 shadow-xl flex items-center gap-4">
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] bg-slate-950/85 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-300 shadow-xl flex items-center gap-4">
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-sm bg-yellow-500/50 border border-yellow-400"></div>
           <span>Historical Range</span>
@@ -106,9 +108,9 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({ taxonKey, scientificName }) => 
 
         {/* Recent Sightings Circle Markers */}
         {occurrences.map((occ) => (
-          <CircleMarker 
-            key={occ.key} 
-            center={[occ.decimalLatitude, occ.decimalLongitude]}
+        <CircleMarker 
+            key={occ.key ?? `${occ.latitude}-${occ.longitude}-${occ.eventDate ?? 'unknown'}`} 
+            center={[occ.latitude, occ.longitude]}
             radius={6}
             pathOptions={{ 
               fillColor: '#3b82f6', 
@@ -127,14 +129,16 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({ taxonKey, scientificName }) => 
                 </div>
                 <div className="mt-3 flex justify-between items-center">
                   <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">Human Sighting</span>
-                  <a 
-                    href={`https://www.gbif.org/occurrence/${occ.key}`} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-[10px] text-emerald-600 hover:underline font-bold"
-                  >
-                    View on GBIF
-                  </a>
+                  {occ.gbifUrl && (
+                    <a 
+                      href={occ.gbifUrl} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-[10px] text-emerald-600 hover:underline font-bold"
+                    >
+                      View on GBIF
+                    </a>
+                  )}
                 </div>
               </div>
             </Popup>

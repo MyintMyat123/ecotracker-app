@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import type { WatchlistPayload } from '../api';
 import SpeciesMap from './SpeciesMap';
 
 interface TrackerData {
@@ -35,9 +36,25 @@ interface SpeciesTrackerProps {
   usageKey: number;
   commonName: string;
   onClose: () => void;
+  isAuthenticated: boolean;
+  isSaved: boolean;
+  saving: boolean;
+  removing: boolean;
+  onAddToWatchlist: (payload: WatchlistPayload) => void;
+  onRemoveFromWatchlist: (gbifSpeciesKey: number) => void;
 }
 
-const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({ usageKey, commonName, onClose }) => {
+const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
+  usageKey,
+  commonName,
+  onClose,
+  isAuthenticated,
+  isSaved,
+  saving,
+  removing,
+  onAddToWatchlist,
+  onRemoveFromWatchlist,
+}) => {
   const [data, setData] = useState<TrackerData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -53,11 +70,11 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({ usageKey, commonName, o
           const result = await response.json();
           setData(result);
         } else {
-          setError("Failed to initialize tracker data. The species might be missing monitoring metrics in the GBIF database.");
+          setError('Failed to initialize tracker data. The species might be missing monitoring metrics in the GBIF database.');
         }
       } catch (err) {
-        console.error("Failed to fetch tracker data", err);
-        setError("Network error. Please check your connection to the monitoring server.");
+        console.error('Failed to fetch tracker data', err);
+        setError('Network error. Please check your connection to the monitoring server.');
       } finally {
         setLoading(false);
       }
@@ -68,25 +85,27 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({ usageKey, commonName, o
 
   if (loading) {
     return (
-      <div className="bg-slate-900/80 backdrop-blur-md rounded-3xl p-12 border border-slate-800 animate-pulse flex flex-col items-center justify-center space-y-4 min-h-[400px]">
-        <div className="w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-        <p className="text-emerald-400 font-bold tracking-widest uppercase text-sm">Initializing Tracker Statistics...</p>
+      <div className="rounded-[2rem] p-12 border border-white/8 bg-slate-950/55 backdrop-blur-xl animate-pulse flex flex-col items-center justify-center space-y-4 min-h-[520px] shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)]">
+        <div className="w-16 h-16 border-4 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+        <p className="text-emerald-300 font-bold tracking-[0.28em] uppercase text-xs">Initializing tracker workspace</p>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="bg-slate-900/80 backdrop-blur-md rounded-3xl p-12 border border-red-500/30 flex flex-col items-center justify-center space-y-6 min-h-[300px]">
-        <div className="text-red-500 text-5xl font-light underline decoration-red-500/20 underline-offset-8">404 Tracker Gap</div>
-        <p className="text-slate-400 text-center max-w-md leading-relaxed font-medium italic">
+      <div className="rounded-[2rem] p-12 border border-red-500/20 bg-slate-950/55 backdrop-blur-xl flex flex-col items-center justify-center space-y-6 min-h-[320px] shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)]">
+        <div className="text-red-300 text-3xl md:text-4xl font-semibold text-center">
+          Tracker data unavailable
+        </div>
+        <p className="text-slate-400 text-center max-w-md leading-relaxed">
           {error}
         </p>
-        <button 
+        <button
           onClick={onClose}
-          className="bg-slate-800 hover:bg-slate-700 text-white px-6 py-2 rounded-full text-xs font-black uppercase tracking-widest transition-all"
+          className="rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-white px-6 py-3 text-xs font-semibold uppercase tracking-[0.24em] transition-all"
         >
-          Return to Explorer
+          Return to explorer
         </button>
       </div>
     );
@@ -95,227 +114,286 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({ usageKey, commonName, o
   if (!data) return null;
 
   const isCritical = ['CR', 'EN', 'VU'].includes(data.conservation.status);
+  const watchlistPayload: WatchlistPayload = {
+    gbif_species_key: usageKey,
+    common_name: commonName,
+    scientific_name: data.identity.scientificName,
+    conservation_status: data.conservation.status,
+    conservation_status_label: data.conservation.statusLabel,
+    family: data.identity.family,
+    kingdom: data.identity.kingdom,
+    image_url: data.images[0] ?? null,
+    last_observed_at: data.trackerStats.lastObserved,
+  };
+
+  const threatGroups = Object.entries(
+    data.threats.reduce((acc, threat) => {
+      const type = threat.type.toUpperCase();
+      if (!acc[type]) acc[type] = [];
+      acc[type].push(threat.description);
+      return acc;
+    }, {} as Record<string, string[]>)
+  );
 
   return (
-    <div className="animate-in fade-in zoom-in-95 duration-500 space-y-6">
-      {/* Header Section */}
-      <div className="bg-slate-900/40 backdrop-blur-xl border border-slate-800 rounded-3xl overflow-hidden relative group shadow-2xl min-h-[350px] flex items-end p-8">
-        {/* Hero Image Background */}
-        {data.images.length > 0 ? (
-          <div className="absolute inset-0 z-0 overflow-hidden">
-            <img 
-              src={data.images[0]} 
-              alt={commonName}
-              className="w-full h-full object-cover opacity-50 group-hover:opacity-70 transition-all duration-1000 grayscale-[0.3] group-hover:grayscale-0 scale-110 group-hover:scale-100"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent"></div>
-            <div className="absolute inset-0 bg-gradient-to-r from-slate-950/80 via-transparent to-transparent"></div>
-          </div>
-        ) : (
-          <div className="absolute inset-0 z-0 bg-gradient-to-br from-slate-800 to-slate-950 opacity-50"></div>
-        )}
-
-        <div className="absolute top-0 right-0 p-6 z-20">
-           <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors text-3xl font-light focus:outline-none bg-slate-950/50 hover:bg-slate-950 w-12 h-12 rounded-full flex items-center justify-center backdrop-blur-md border border-white/10">×</button>
-        </div>
-        
-        <div className="flex flex-col md:flex-row md:items-end gap-6 relative z-10 w-full">
-          <div className="space-y-3 flex-1">
-            <div className="flex items-center gap-3">
-              <span className={`px-3 py-1 rounded-full text-[10px] font-black tracking-widest uppercase border backdrop-blur-md ${
-                isCritical ? 'bg-red-500/20 text-red-400 border-red-500/30' : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+    <div className="space-y-6">
+      <section className="rounded-[2rem] border border-white/8 bg-slate-950/60 backdrop-blur-xl p-5 md:p-6 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)]">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`px-3.5 py-1.5 rounded-full text-[10px] font-black tracking-[0.24em] uppercase border flex items-center justify-center ${
+                isCritical ? 'bg-red-500/15 text-red-300 border-red-500/20' : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20'
               }`}>
-                Live Tracker Active
+                Live tracker active
               </span>
               {data.conservation.isExtinct && (
-                <span className="px-3 py-1 rounded-full bg-slate-800/80 text-slate-400 text-[10px] font-black uppercase border border-slate-700 backdrop-blur-md">
-                  Memorial Mode
+                <span className="px-3.5 py-1.5 rounded-full text-[10px] font-black tracking-[0.24em] uppercase border bg-white/5 text-slate-400 border-white/10 flex items-center justify-center">
+                  Memorial mode
                 </span>
               )}
             </div>
-            <h2 className="text-5xl md:text-7xl font-black text-white leading-none tracking-tighter drop-shadow-2xl">
-              {commonName}
-            </h2>
-            <p className="text-slate-300 italic text-xl font-light tracking-tight drop-shadow-lg">
-              {data.identity.scientificName}
-            </p>
+            <div>
+              <h2 className="text-3xl md:text-4xl font-semibold text-white tracking-tight">{commonName}</h2>
+              <p className="text-slate-300 italic text-lg md:text-xl mt-1">
+                {data.identity.scientificName}
+              </p>
+            </div>
           </div>
 
-          <div className="text-right flex flex-col items-end">
-             <div className={`text-8xl font-black tracking-tighter leading-none ${
-               isCritical ? 'text-red-500 drop-shadow-[0_0_20px_rgba(239,68,68,0.6)]' : 'text-emerald-500 drop-shadow-[0_0_20px_rgba(16,185,129,0.4)]'
-             }`}>
-               {data.conservation.status}
-             </div>
-             <div className="text-slate-400 font-bold uppercase text-[10px] tracking-widest mt-2 bg-slate-950/40 px-3 py-1 rounded-full border border-white/5 backdrop-blur-sm">
-               {data.conservation.statusLabel}
-             </div>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <div className={`rounded-2xl border px-4 py-3 text-center min-w-[128px] ${
+              isCritical ? 'bg-red-500/10 border-red-500/20' : 'bg-emerald-500/10 border-emerald-500/20'
+            }`}>
+              <div className={`text-4xl font-black leading-none ${isCritical ? 'text-red-300' : 'text-emerald-300'}`}>
+                {data.conservation.status}
+              </div>
+              <div className="mt-2 text-xs font-semibold text-slate-300 leading-tight">
+                {data.conservation.statusLabel}
+              </div>
+            </div>
+
+            {isSaved ? (
+              <button
+                type="button"
+                onClick={() => onRemoveFromWatchlist(usageKey)}
+                disabled={removing}
+                className="inline-flex items-center justify-center rounded-full border border-red-400/30 bg-transparent hover:bg-red-500/10 text-red-200 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.22em] transition-all"
+              >
+                {removing ? 'Removing...' : 'Remove from watchlist'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onAddToWatchlist(watchlistPayload)}
+                disabled={saving}
+                title={isAuthenticated ? 'Add this species to your watchlist' : 'Sign in to save species'}
+                className="inline-flex items-center justify-center rounded-full border border-emerald-400/35 bg-transparent hover:bg-emerald-400/10 text-emerald-300 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.22em] transition-all"
+              >
+                {saving ? 'Saving...' : 'Add to watchlist'}
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={onClose}
+            className="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/5 hover:bg-red-500/10 text-slate-400 hover:text-red-200 w-10 h-10 transition-all"
+            aria-label="Close tracker"
+            title="Close tracker"
+          >
+            X
+            </button>
           </div>
         </div>
-      </div>
+      </section>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Sightings Pulse */}
-        <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-6 space-y-4 hover:border-emerald-500/30 transition-all duration-300">
-          <div className="flex justify-between items-center">
-            <h3 className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Global Activity</h3>
-            <div className="flex gap-1 items-end h-3">
-              {[0.4, 0.7, 0.3, 0.9].map((delay, i) => (
-                <div 
-                  key={i} 
-                  className="w-1 bg-emerald-500 rounded-full animate-pulse" 
-                  style={{ 
-                    height: `${Math.random() * 100}%`,
-                    animationDelay: `${delay}s`,
-                    animationDuration: '1s'
-                  }}
-                ></div>
-              ))}
+      <section className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.72fr)_minmax(340px,0.9fr)] gap-6 items-start">
+        <div className="space-y-6">
+          <div className="rounded-[2rem] border border-white/8 bg-slate-950/55 backdrop-blur-xl overflow-hidden shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)]">
+            <div className="flex items-center justify-between px-5 pt-5">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.28em] text-slate-500 font-semibold">Map workbench</p>
+                <h3 className="text-lg font-semibold text-white mt-1">Distribution and sightings</h3>
+              </div>
+              <div className="text-[10px] uppercase tracking-[0.24em] text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-3 py-1">
+                Focus surface
+              </div>
+            </div>
+            <div className="p-5">
+              <SpeciesMap taxonKey={usageKey} scientificName={data.identity.scientificName} />
             </div>
           </div>
-          <div className="space-y-1">
-             <div className="text-4xl font-black text-white leading-none">
-               {data.trackerStats.globalSightings.toLocaleString()}
-             </div>
-             <div className="text-slate-500 text-[10px] font-bold uppercase tracking-tight">Total Observations Records</div>
-          </div>
-          <div className="pt-4 border-t border-slate-800/50 flex justify-between items-end">
-            <div className="space-y-1">
-              <div className="text-xl font-black text-emerald-400 leading-none">+{data.trackerStats.sightingsThisYear}</div>
-              <div className="text-[10px] text-slate-500 uppercase font-black">Sightings in {new Date().getFullYear()}</div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="rounded-2xl border border-white/8 bg-slate-950/55 backdrop-blur-xl p-5">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-slate-500 font-semibold">Global activity</p>
+              <div className="text-3xl font-black text-white mt-3 leading-none">
+                {data.trackerStats.globalSightings.toLocaleString()}
+              </div>
+              <p className="text-slate-500 text-[10px] uppercase tracking-[0.22em] mt-2">Observation records</p>
             </div>
-            <div className="text-right">
-              <div className="text-[10px] text-slate-500 uppercase font-black mb-1">Last Spotted</div>
-              <div className="text-xs font-bold text-white">
+
+            <div className="rounded-2xl border border-white/8 bg-slate-950/55 backdrop-blur-xl p-5">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-slate-500 font-semibold">This year</p>
+              <div className="text-3xl font-black text-emerald-300 mt-3 leading-none">
+                +{data.trackerStats.sightingsThisYear}
+              </div>
+              <p className="text-slate-500 text-[10px] uppercase tracking-[0.22em] mt-2">Recent sightings</p>
+            </div>
+
+            <div className="rounded-2xl border border-white/8 bg-slate-950/55 backdrop-blur-xl p-5">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-slate-500 font-semibold">Last spotted</p>
+              <div className="text-lg font-semibold text-white mt-3 leading-tight">
                 {data.trackerStats.lastObserved ? new Date(data.trackerStats.lastObserved).toLocaleDateString() : 'N/A'}
               </div>
+              <p className="text-slate-500 text-[10px] uppercase tracking-[0.22em] mt-2">Latest observation</p>
             </div>
           </div>
         </div>
 
-        {/* Habitat Footprint */}
-        <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-6 space-y-4 hover:border-cyan-500/30 transition-all duration-300">
-          <h3 className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Habitat Footprint</h3>
-          <div className="space-y-1">
-             <div className="text-4xl font-black text-white leading-none">
-               {data.trackerStats.countriesObserved.length}
-             </div>
-             <div className="text-slate-500 text-[10px] font-bold uppercase tracking-tight">Active Countries Tracked</div>
-          </div>
-          <div className="flex flex-wrap gap-1.5 mt-4">
-            {data.trackerStats.countriesObserved.slice(0, 8).map(c => (
-              <span key={c} className="px-2 py-0.5 bg-slate-800 border border-slate-700 text-slate-400 text-[9px] rounded-md font-black uppercase tracking-tighter">
-                {c}
-              </span>
-            ))}
-            {data.trackerStats.countriesObserved.length > 8 && (
-              <span className="text-[10px] text-slate-600 font-bold px-1 self-center">+{data.trackerStats.countriesObserved.length - 8} more</span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Ecological Insights Grid */}
-      {data.threats.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {Object.entries(
-            data.threats.reduce((acc, t) => {
-              const type = t.type.toUpperCase();
-              if (!acc[type]) acc[type] = [];
-              acc[type].push(t.description);
-              return acc;
-            }, {} as Record<string, string[]>)
-          ).map(([type, descriptions]) => (
-            <div 
-              key={type} 
-              className="bg-slate-900/60 border border-slate-800 rounded-3xl p-6 space-y-4 hover:border-emerald-500/30 transition-all duration-300"
-            >
-              <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></div>
-                <h3 className="text-emerald-400 font-black uppercase text-[10px] tracking-widest">{type}</h3>
+        <aside className="space-y-4">
+          <div className="rounded-[2rem] border border-white/8 bg-slate-950/55 backdrop-blur-xl p-5 space-y-5">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.28em] text-slate-500 font-semibold">Taxonomy</p>
+              <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="text-slate-500 block">Kingdom</span>
+                  <span className="text-white font-medium">{data.identity.kingdom || 'Unknown'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Family</span>
+                  <span className="text-white font-medium">{data.identity.family || 'Unknown'}</span>
+                </div>
               </div>
-              <div className="space-y-4 max-h-[200px] overflow-y-auto pr-2 custom-scrollbar">
-                {descriptions.map((desc, i) => (
-                  <p key={i} className="text-[11px] text-slate-300 leading-relaxed">
-                    {desc}
-                  </p>
+            </div>
+
+            <div className="pt-5 border-t border-white/8">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-slate-500 font-semibold">Distribution</p>
+              <div className="text-3xl font-black text-white mt-4 leading-none">
+                {data.trackerStats.countriesObserved.length}
+              </div>
+              <p className="text-slate-500 text-[10px] uppercase tracking-[0.22em] mt-2">Countries tracked</p>
+              <div className="flex flex-wrap gap-1.5 mt-4">
+                {data.trackerStats.countriesObserved.slice(0, 8).map((country) => (
+                  <span
+                    key={country}
+                    className="px-2 py-1 rounded-lg bg-white/5 border border-white/8 text-slate-300 text-[10px] font-semibold uppercase tracking-[0.18em]"
+                  >
+                    {country}
+                  </span>
+                ))}
+                {data.trackerStats.countriesObserved.length > 8 && (
+                  <button
+                    type="button"
+                    className="text-[10px] text-cyan-300 font-semibold underline underline-offset-4 decoration-cyan-400/40 px-1 self-center"
+                  >
+                    +{data.trackerStats.countriesObserved.length - 8} more
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-[2rem] border border-white/8 bg-slate-950/55 backdrop-blur-xl p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.28em] text-slate-500 font-semibold">Threat notes</p>
+                <h3 className="text-lg font-semibold text-white mt-1">Conservation and risks</h3>
+              </div>
+              <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-[0.24em] border flex items-center justify-center ${
+                isCritical ? 'bg-red-500/15 text-red-300 border-red-500/20' : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20'
+              }`}>
+                Conservation
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-white/8 bg-white/5 px-4 py-3">
+              <div className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-semibold">Status summary</div>
+              <div className="mt-2 flex flex-wrap items-center gap-3">
+                <span className={`inline-flex items-center justify-center px-4 py-2 rounded-full text-xs font-black tracking-[0.18em] border ${
+                  isCritical ? 'bg-red-500/10 text-red-200 border-red-400/20' : 'bg-emerald-500/10 text-emerald-200 border-emerald-400/20'
+                }`}>
+                  {data.conservation.status}
+                </span>
+                <span className="text-sm text-slate-300 font-medium">
+                  {data.conservation.statusLabel}
+                </span>
+              </div>
+            </div>
+
+            {threatGroups.length > 0 ? (
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                {threatGroups.map(([type, descriptions]) => (
+                  <div key={type} className="rounded-2xl border border-white/8 bg-white/5 p-4 flex flex-col max-h-72">
+                    <div className="text-emerald-300 text-[10px] uppercase tracking-[0.24em] font-black mb-3">{type}</div>
+                    <div className="space-y-3 overflow-y-auto pr-2 flex-1">
+                      {descriptions.map((desc, index) => (
+                        <p key={index} className="text-sm text-slate-300 leading-relaxed">
+                          {desc}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ) : (
+              <div className="mt-4 rounded-2xl border border-dashed border-white/10 bg-white/5 p-4 text-sm text-slate-500">
+                No detailed ecological analysis available in the GBIF monitoring database for this species usageKey.
+              </div>
+            )}
+          </div>
+        </aside>
+      </section>
 
-      {data.threats.length === 0 && (
-        <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-6 text-center italic text-slate-500 text-xs">
-          No detailed ecological analysis available in the GBIF monitoring database for this species usageKey.
-        </div>
-      )}
-
-      {/* Evidence Gallery Section */}
       {data.images.length > 1 && (
-        <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-300">
+        <section className="space-y-4">
           <div className="flex items-center gap-3 px-2">
-            <h3 className="text-white font-black text-xs uppercase tracking-widest">Field Evidence Gallery</h3>
-            <div className="h-px bg-slate-800 flex-1"></div>
+            <h3 className="text-white font-semibold text-xs uppercase tracking-[0.28em]">Field evidence gallery</h3>
+            <div className="h-px bg-white/10 flex-1" />
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-            {data.images.slice(1, 11).map((img, i) => (
-              <div 
-                key={i} 
+            {data.images.slice(1, 11).map((img, index) => (
+              <div
+                key={index}
                 onClick={() => setSelectedImage(img)}
-                className="aspect-square rounded-2xl overflow-hidden border border-slate-800 hover:border-emerald-500/50 transition-all duration-500 group relative shadow-xl cursor-zoom-in"
+                className="aspect-square rounded-2xl overflow-hidden border border-white/8 hover:border-emerald-500/40 transition-all duration-300 group relative shadow-xl cursor-zoom-in bg-white/5"
               >
-                <img 
-                  src={img} 
-                  alt={`${commonName} evidence ${i}`} 
+                <img
+                  src={img}
+                  alt={`${commonName} evidence ${index}`}
                   className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
                   loading="lazy"
                 />
-                <div className="absolute inset-0 bg-emerald-500/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
+                <div className="absolute inset-0 bg-emerald-500/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
               </div>
             ))}
           </div>
-        </div>
+        </section>
       )}
 
-      {/* Lightbox / Image Zoom Modal */}
       {selectedImage && (
-        <div 
+        <div
           className="fixed inset-0 z-[9999] bg-slate-950/95 backdrop-blur-2xl flex items-center justify-center p-4 md:p-12 animate-in fade-in duration-300"
           onClick={() => setSelectedImage(null)}
         >
-          <button 
-            className="absolute top-8 right-8 text-white/50 hover:text-white text-5xl font-light transition-all hover:rotate-90 duration-300 focus:outline-none"
+          <button
+            className="absolute top-8 right-8 text-white/50 hover:text-red-200 text-5xl font-light transition-all hover:rotate-90 duration-300 focus:outline-none"
             onClick={() => setSelectedImage(null)}
           >
-            ×
+            X
           </button>
-          
+
           <div className="relative max-w-5xl w-full max-h-full flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
-            <img 
-              src={selectedImage} 
-              alt="Enlarged monitoring evidence" 
+            <img
+              src={selectedImage}
+              alt="Enlarged monitoring evidence"
               className="max-w-full max-h-[85vh] rounded-2xl shadow-[0_0_50px_-12px_rgba(16,185,129,0.3)] border border-white/10 animate-in zoom-in-95 duration-500"
             />
             <div className="absolute -bottom-10 left-0 right-0 text-center">
-              <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Scientific Observation Evidence</p>
+              <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Scientific observation evidence</p>
             </div>
           </div>
         </div>
       )}
-
-      {/* Map Feature */}
-      <div className="relative rounded-3xl overflow-hidden border border-slate-800 group shadow-2xl">
-        <div className="absolute top-6 left-6 z-[1000] space-y-1 bg-slate-900/80 backdrop-blur-xl p-4 rounded-2xl border border-slate-800 group-hover:border-emerald-500/30 transition-colors duration-500">
-          <h4 className="text-white font-black text-xs uppercase tracking-widest">Interactive Range Monitor</h4>
-          <p className="text-slate-400 text-[10px] font-medium leading-tight max-w-[200px]">
-            Live spatial data synthesized from {data.trackerStats.globalSightings.toLocaleString()} records.
-          </p>
-        </div>
-        <SpeciesMap taxonKey={usageKey} scientificName={data.identity.scientificName} />
-      </div>
     </div>
   );
 };

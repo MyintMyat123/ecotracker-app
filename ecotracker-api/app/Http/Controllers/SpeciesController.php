@@ -74,9 +74,13 @@ class SpeciesController extends Controller
      * @param int $usageKey
      * @return JsonResponse
      */
-    public function occurrences(int $usageKey): JsonResponse
+    public function occurrences(Request $request, int $usageKey): JsonResponse
     {
-        $results = $this->speciesService->getOccurrences($usageKey);
+        $validated = $request->validate([
+            'limit' => 'sometimes|integer|min:1|max:500',
+        ]);
+
+        $results = $this->speciesService->getOccurrences($usageKey, $validated['limit'] ?? 20);
 
         return response()->json($results);
     }
