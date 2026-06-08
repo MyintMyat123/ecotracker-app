@@ -101,4 +101,21 @@ class SpeciesController extends Controller
 
         return response()->json($metrics);
     }
+
+    /**
+     * Get species by country and conservation status.
+     *
+     * @param string $countryName
+     * @return JsonResponse
+     */
+    public function speciesByCountry(string $countryName): JsonResponse
+    {
+        $species = $this->speciesService->getSpeciesByCountry($countryName);
+
+        if (empty($species)) {
+            return response()->json(['message' => 'No species found for this country'], 404);
+        }
+
+        return response()->json($species);
+    }
 }

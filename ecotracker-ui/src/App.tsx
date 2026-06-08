@@ -5,8 +5,9 @@ import AuthPanel from './components/AuthPanel';
 import SpeciesSearch from './components/SpeciesSearch';
 import TrackerPage from './components/TrackerPage';
 import WatchlistPage from './components/WatchlistPage';
+import CountrySpeciesPage from './components/CountrySpeciesPage';
 
-type Page = 'home' | 'tracker' | 'watchlist' | 'signin' | 'signup';
+type Page = 'home' | 'tracker' | 'watchlist' | 'signin' | 'signup' | 'countryspecies';
 
 interface TrackerSelection {
   usageKey: number;
@@ -164,6 +165,9 @@ function App() {
             <button type="button" onClick={() => setPage('watchlist')} className={navButtonClass('watchlist')}>
               Watchlist
             </button>
+            <button type="button" onClick={() => setPage('countryspecies')} className={navButtonClass('countryspecies')}>
+              Country Species
+            </button>
             {!signedIn && (
               <>
                 <button type="button" onClick={() => setPage('signin')} className={navButtonClass('signin')}>
@@ -202,7 +206,7 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-grow py-10 md:py-12 relative z-10">
+      <main className={`flex-grow relative z-10 ${page === 'countryspecies' ? '' : 'py-10 md:py-12'}`}>
         {watchlistError && (
           <div className="max-w-4xl mx-auto px-6 pb-4">
             <div className="text-sm text-amber-100 bg-amber-950/30 border border-amber-500/30 rounded-2xl px-4 py-3 backdrop-blur-md">
@@ -251,6 +255,10 @@ function App() {
           />
         )}
 
+        {page === 'countryspecies' && (
+          <CountrySpeciesPage onViewTracker={openTracker} />
+        )}
+
         {page === 'signin' && (
           <AuthPanel
             mode="login"
@@ -268,16 +276,18 @@ function App() {
         )}
       </main>
 
-      <footer className="border-t border-white/8 py-8 bg-slate-950/70 backdrop-blur-xl relative z-10">
-        <div className="max-w-7xl mx-auto px-4 text-center space-y-4">
-          <p className="text-slate-500 text-sm">
-            Powered by GBIF.org - Global Biodiversity Information Facility
-          </p>
-          <div className="flex justify-center space-x-6 text-slate-400">
-            <span className="text-xs">(c) 2026 EcoTracker Project</span>
+      {page !== 'countryspecies' && (
+        <footer className="border-t border-white/8 py-8 bg-slate-950/70 backdrop-blur-xl relative z-10">
+          <div className="max-w-7xl mx-auto px-4 text-center space-y-4">
+            <p className="text-slate-500 text-sm">
+              Powered by GBIF.org - Global Biodiversity Information Facility
+            </p>
+            <div className="flex justify-center space-x-6 text-slate-400">
+              <span className="text-xs">(c) 2026 EcoTracker Project</span>
+            </div>
           </div>
-        </div>
-      </footer>
+        </footer>
+      )}
     </div>
   );
 }

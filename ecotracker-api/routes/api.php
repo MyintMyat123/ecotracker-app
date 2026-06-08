@@ -23,6 +23,7 @@ Route::prefix('auth')->group(function () {
 Route::prefix('species')->group(function () {
     Route::get('/search', [SpeciesController::class, 'search']);
     Route::get('/suggest', [SpeciesController::class, 'suggest']);
+    Route::get('/country/{countryName}', [SpeciesController::class, 'speciesByCountry']);
     Route::get('/{usageKey}', [SpeciesController::class, 'show']);
     Route::get('/{usageKey}/occurrences', [SpeciesController::class, 'occurrences']);
     Route::get('/{usageKey}/tracker', [SpeciesController::class, 'tracker']);
