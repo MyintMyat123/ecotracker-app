@@ -268,6 +268,7 @@ class SpeciesService
                 'longitude' => (float) $longitude,
                 'eventDate' => $record['eventDate'] ?? null,
                 'country' => $record['country'] ?? 'Unknown',
+                'countryCode' => $record['countryCode'] ?? null,
                 'locality' => $record['locality'] ?? 'Unknown',
                 'basisOfRecord' => $record['basisOfRecord'] ?? 'HUMAN_OBSERVATION',
                 'gbifUrl' => $key ? "https://www.gbif.org/occurrence/{$key}" : null,

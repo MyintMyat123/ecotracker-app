@@ -11,7 +11,7 @@ return new class extends Migration
         Schema::create('notifications', function (Blueprint $table) {
             $table->id();
             $table->foreignId('user_id')->constrained()->onDelete('cascade');
-            $table->string('type'); // 'watchlist_update', 'status_change', 'new_sighting', 'system'
+            $table->string('type'); // 'watchlist_add', 'watchlist_update', 'status_change', 'new_sighting', 'system'
             $table->string('title');
             $table->text('message');
             $table->json('data')->nullable(); // extra metadata (species key, etc.)

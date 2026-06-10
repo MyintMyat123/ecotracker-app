@@ -18,6 +18,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'kingdom',
     'image_url',
     'last_observed_at',
+    'last_known_occurrence_count',
+    'last_known_country_count',
+    'last_known_media_count',
+    'last_known_coordinate_count',
+    'last_known_issue_count',
+    'monitoring_snapshot',
+    'monitored_at',
 ])]
 class Watchlist extends Model
 {
@@ -27,6 +34,8 @@ class Watchlist extends Model
     {
         return [
             'last_observed_at' => 'datetime',
+            'monitoring_snapshot' => 'array',
+            'monitored_at' => 'datetime',
         ];
     }
 

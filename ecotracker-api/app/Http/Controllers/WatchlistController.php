@@ -4,11 +4,16 @@ namespace App\Http\Controllers;
 
 use App\Models\AppNotification;
 use App\Models\Watchlist;
+use App\Services\WatchlistMonitoringService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class WatchlistController extends Controller
 {
+    public function __construct(private WatchlistMonitoringService $monitoringService)
+    {
+    }
+
     public function index(Request $request): JsonResponse
     {
         $items = $request->user()
@@ -62,13 +67,15 @@ class WatchlistController extends Controller
                 'type' => 'watchlist_add',
                 'title' => 'Species Added to Watchlist',
                 'message' => $message,
-                'data' => json_encode([
+                'data' => [
                     'gbif_species_key' => $validated['gbif_species_key'],
                     'species_name' => $speciesName,
                     'conservation_status' => $status,
-                ]),
+                ],
                 'is_read' => false,
             ]);
+
+            $this->monitoringService->initializeBaseline($item);
         }
 
         return response()->json($item, $item->wasRecentlyCreated ? 201 : 200);
