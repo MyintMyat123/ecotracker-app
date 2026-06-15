@@ -124,34 +124,30 @@ class WatchlistMonitoringService
         $occurrenceQuery .= '&facet=country&facet=issue&facet=basisOfRecord';
 
         $responses = Http::pool(fn ($pool) => [
-            $pool->as('details')->get("{$this->baseUrl}/species/{$usageKey}"),
-            $pool->as('iucn')->get("{$this->baseUrl}/species/{$usageKey}/iucnRedListCategory"),
-            $pool->as('occurrences')->get("{$this->baseUrl}/occurrence/search?{$occurrenceQuery}"),
-            $pool->as('coordinateOccurrences')->get("{$this->baseUrl}/occurrence/search", [
+            $pool->as('details')->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/species/{$usageKey}"),
+            $pool->as('iucn')->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/species/{$usageKey}/iucnRedListCategory"),
+            $pool->as('occurrences')->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/occurrence/search?{$occurrenceQuery}"),
+            $pool->as('coordinateOccurrences')->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/occurrence/search", [
                 'taxonKey' => $usageKey,
                 'hasCoordinate' => 'true',
                 'limit' => 1,
             ]),
-            $pool->as('mediaOccurrences')->get("{$this->baseUrl}/occurrence/search", [
+            $pool->as('mediaOccurrences')->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/occurrence/search", [
                 'taxonKey' => $usageKey,
                 'mediaType' => 'StillImage',
                 'limit' => 1,
             ]),
         ]);
 
-        if (!isset($responses['details']) || !$responses['details']->successful()) {
+        $details = $this->successfulJson($responses['details'] ?? null, []);
+        if (empty($details)) {
             return [];
         }
 
-        $details = $responses['details']->json();
-        $iucn = isset($responses['iucn']) && $responses['iucn']->successful() ? $responses['iucn']->json() : null;
-        $occurrences = isset($responses['occurrences']) && $responses['occurrences']->successful() ? $responses['occurrences']->json() : [];
-        $coordinateOccurrences = isset($responses['coordinateOccurrences']) && $responses['coordinateOccurrences']->successful()
-            ? $responses['coordinateOccurrences']->json()
-            : [];
-        $mediaOccurrences = isset($responses['mediaOccurrences']) && $responses['mediaOccurrences']->successful()
-            ? $responses['mediaOccurrences']->json()
-            : [];
+        $iucn = $this->successfulJson($responses['iucn'] ?? null, null);
+        $occurrences = $this->successfulJson($responses['occurrences'] ?? null, []);
+        $coordinateOccurrences = $this->successfulJson($responses['coordinateOccurrences'] ?? null, []);
+        $mediaOccurrences = $this->successfulJson($responses['mediaOccurrences'] ?? null, []);
 
         $countryFacets = $this->facetCounts($occurrences, 'COUNTRY');
         $issueFacets = $this->facetCounts($occurrences, 'ISSUE');
@@ -180,6 +176,21 @@ class WatchlistMonitoringService
             'last_occurrence_key' => $latestOccurrence['key'] ?? null,
             'checked_at' => now()->toIso8601String(),
         ];
+    }
+
+    private function successfulJson(mixed $response, mixed $fallback = []): mixed
+    {
+        if (!is_object($response) || !method_exists($response, 'successful') || !$response->successful()) {
+            if ($response instanceof \Throwable) {
+                Log::warning('GBIF watchlist request failed', [
+                    'error' => $response->getMessage(),
+                ]);
+            }
+
+            return $fallback;
+        }
+
+        return $response->json();
     }
 
     private function facetCounts(array $occurrenceData, string $facetName): array

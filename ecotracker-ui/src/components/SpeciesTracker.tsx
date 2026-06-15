@@ -106,6 +106,18 @@ const formatFacetName = (value: string) => value
   .toLowerCase()
   .replace(/\b\w/g, (char) => char.toUpperCase());
 
+const countryDisplayNames = typeof Intl !== 'undefined' && 'DisplayNames' in Intl
+  ? new Intl.DisplayNames(['en'], { type: 'region' })
+  : null;
+
+const getCountryName = (code: string) => {
+  try {
+    return countryDisplayNames?.of(code.toUpperCase()) || code;
+  } catch {
+    return code;
+  }
+};
+
 const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
   usageKey,
   commonName,
@@ -122,6 +134,7 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [showAllCountries, setShowAllCountries] = useState(false);
+  const [selectedMapCountries, setSelectedMapCountries] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'monitoring' | 'ecology' | 'gallery'>('monitoring');
 
   useEffect(() => {
@@ -143,6 +156,11 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
       }
     };
     fetchTrackerData();
+  }, [usageKey]);
+
+  useEffect(() => {
+    setSelectedMapCountries([]);
+    setShowAllCountries(false);
   }, [usageKey]);
 
   if (loading) {
@@ -206,6 +224,14 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
   const displayedCountries = showAllCountries
     ? data.trackerStats.countriesObserved
     : data.trackerStats.countriesObserved.slice(0, 12);
+  const toggleMapCountry = (country: string) => {
+    const code = country.toUpperCase();
+    setSelectedMapCountries((current) =>
+      current.includes(code)
+        ? current.filter((item) => item !== code)
+        : [...current, code]
+    );
+  };
   const maxYearlyCount = Math.max(...data.monitoring.yearlyTrend.yearlyCounts.map((item) => item.count), 1);
   const maxMonthlyCount = Math.max(...data.monitoring.seasonality.monthlyCounts.map((item) => item.count), 1);
   const trendTone = data.monitoring.yearlyTrend.direction === 'up'
@@ -376,6 +402,36 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
         ))}
       </div>
 
+      {data.trackerStats.countriesObserved.length > 0 && (
+        <div className="rounded-2xl border border-white/8 bg-slate-950/45 backdrop-blur-xl p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500 font-semibold">Countries observed</p>
+              <p className="mt-1 text-xs text-slate-400">Hover a country code to see its full name.</p>
+            </div>
+            <span className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-[10px] font-black text-cyan-200">
+              {data.trackerStats.countriesObserved.length}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {displayedCountries.map((country) => (
+              <span
+                key={country}
+                title={getCountryName(country)}
+                className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/8 text-slate-300 text-[10px] font-semibold uppercase tracking-[0.16em]"
+              >
+                {country}
+              </span>
+            ))}
+            {data.trackerStats.countriesObserved.length > 12 && (
+              <button type="button" onClick={() => setShowAllCountries(!showAllCountries)} className="px-2.5 py-1 rounded-lg text-[10px] text-cyan-300 hover:text-cyan-200 font-semibold">
+                {showAllCountries ? 'Show less' : `+${data.trackerStats.countriesObserved.length - 12} more`}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="rounded-2xl border border-white/8 bg-slate-950/45 backdrop-blur-xl p-1.5 flex flex-wrap gap-1.5">
         {[
           { id: 'monitoring', label: 'Monitoring' },
@@ -488,21 +544,51 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
           </div>
 
           <div className="rounded-2xl border border-white/8 bg-slate-950/55 backdrop-blur-xl p-4">
-            <div className="flex flex-wrap gap-1.5">
-              {displayedCountries.map((country) => (
-                <span key={country} className="px-2 py-1 rounded-lg bg-white/5 border border-white/8 text-slate-300 text-[10px] font-semibold uppercase tracking-[0.16em]">
-                  {country}
-                </span>
-              ))}
-              {data.trackerStats.countriesObserved.length > 12 && (
-                <button type="button" onClick={() => setShowAllCountries(!showAllCountries)} className="px-2 py-1 rounded-lg text-[10px] text-cyan-300 hover:text-cyan-200 font-semibold">
-                  {showAllCountries ? 'Show less' : `+${data.trackerStats.countriesObserved.length - 12} more`}
+            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500 font-semibold">Map country filter</p>
+                <p className="mt-1 text-xs text-slate-400">Click country codes to filter sightings and range layer below.</p>
+              </div>
+              {selectedMapCountries.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedMapCountries([])}
+                  className="w-fit rounded-full border border-white/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-300 hover:border-emerald-400/25 hover:text-emerald-200"
+                >
+                  Clear filter
                 </button>
               )}
             </div>
+            <div className="flex flex-wrap gap-1.5">
+              {data.trackerStats.countriesObserved.map((country) => {
+                const code = country.toUpperCase();
+                const active = selectedMapCountries.includes(code);
+                return (
+                  <button
+                    key={country}
+                    type="button"
+                    title={getCountryName(country)}
+                    aria-pressed={active}
+                    onClick={() => toggleMapCountry(country)}
+                    className={`px-2.5 py-1 rounded-lg border text-[10px] font-semibold uppercase tracking-[0.16em] transition-colors ${
+                      active
+                        ? 'border-emerald-400/30 bg-emerald-400/15 text-emerald-200'
+                        : 'border-white/8 bg-white/5 text-slate-300 hover:border-cyan-400/25 hover:text-cyan-200'
+                    }`}
+                  >
+                    {country}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          <SpeciesMap taxonKey={usageKey} scientificName={data.identity.scientificName} heightClass="h-[460px] md:h-[520px]" />
+          <SpeciesMap
+            taxonKey={usageKey}
+            scientificName={data.identity.scientificName}
+            heightClass="h-[460px] md:h-[520px]"
+            selectedCountryCodes={selectedMapCountries}
+          />
 
           <div className="rounded-2xl border border-white/8 bg-slate-950/55 backdrop-blur-xl p-5">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -564,26 +650,35 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
             </div>
 
             {threatGroups.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {threatGroups.map(([type, descriptions]) => {
-                  const colorClass = threatTypeColors[type] || 'text-slate-300 bg-white/5 border-white/10';
-                  const combinedText = descriptions.join(' ');
-                  return (
-                    <div key={type} className="rounded-2xl border border-white/8 bg-white/3 p-4 flex flex-col">
-                      <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] uppercase tracking-[0.2em] font-black border w-fit mb-3 ${colorClass}`}>
-                        {type.replace(/_/g, ' ')}
+              <div className="space-y-4">
+                <AiOverview
+                  label="Summarize ecological profile"
+                  context="ecological profile"
+                  commonName={commonName}
+                  scientificName={data.identity.scientificName}
+                  sections={threatGroups.map(([type, descriptions]) => ({
+                    label: type.replace(/_/g, ' '),
+                    text: descriptions.join(' '),
+                  }))}
+                />
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {threatGroups.map(([type, descriptions]) => {
+                    const colorClass = threatTypeColors[type] || 'text-slate-300 bg-white/5 border-white/10';
+                    return (
+                      <div key={type} className="rounded-2xl border border-white/8 bg-white/3 p-4 flex flex-col">
+                        <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] uppercase tracking-[0.2em] font-black border w-fit mb-3 ${colorClass}`}>
+                          {type.replace(/_/g, ' ')}
+                        </div>
+                        <div className="space-y-2 overflow-y-auto max-h-56 custom-scrollbar flex-1 pr-1">
+                          {descriptions.map((desc, index) => (
+                            <p key={index} className="text-sm text-slate-300 leading-relaxed">{desc}</p>
+                          ))}
+                        </div>
                       </div>
-                      <div className="space-y-2 overflow-y-auto max-h-56 custom-scrollbar flex-1 pr-1">
-                        {descriptions.map((desc, index) => (
-                          <p key={index} className="text-sm text-slate-300 leading-relaxed">{desc}</p>
-                        ))}
-                      </div>
-                      {combinedText.length > 50 && (
-                        <AiOverview text={combinedText} context={type.toLowerCase().replace(/_/g, ' ')} label="AI Summary" />
-                      )}
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
             ) : (
               <div className="rounded-2xl border border-dashed border-white/10 p-8 text-center text-sm text-slate-500">

@@ -1,15 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
-import { apiRequest, TOKEN_STORAGE_KEY, type AuthUser, type WatchlistItem, type WatchlistPayload } from './api';
+import { apiRequest, TOKEN_STORAGE_KEY, type AppNotification, type AuthUser, type WatchlistItem, type WatchlistPayload } from './api';
 import LandingHero from './components/LandingHero';
 import SpeciesTracker from './components/SpeciesTracker';
 import WatchlistPage from './components/WatchlistPage';
 import CountryExplorer from './components/CountryExplorer';
 import AdminCenter from './components/AdminCenter';
 import NotificationPanel from './components/NotificationPanel';
+import NotificationDetailPage from './components/NotificationDetailPage';
+import NotificationsPage from './components/NotificationsPage';
 import AuthModal from './components/AuthModal';
 import AdvancedSpeciesSearch from './components/AdvancedSpeciesSearch';
 
-type Page = 'home' | 'search' | 'tracker' | 'watchlist' | 'countries' | 'admin';
+type Page = 'home' | 'search' | 'tracker' | 'watchlist' | 'countries' | 'notifications' | 'admin' | 'notification';
 
 interface TrackerTarget {
   usageKey: number;
@@ -24,6 +26,7 @@ function App() {
   const [savingKey, setSavingKey] = useState<number | null>(null);
   const [removingKey, setRemovingKey] = useState<number | null>(null);
   const [trackerTarget, setTrackerTarget] = useState<TrackerTarget | null>(null);
+  const [selectedNotification, setSelectedNotification] = useState<AppNotification | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -123,13 +126,23 @@ function App() {
   const goToPage = (nextPage: Page) => {
     setPage(nextPage);
     if (nextPage !== 'tracker') setTrackerTarget(null);
+    if (nextPage !== 'notification') setSelectedNotification(null);
     setMobileMenuOpen(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleViewTracker = (species: TrackerTarget) => {
     setTrackerTarget(species);
+    setSelectedNotification(null);
     setPage('tracker');
+    setMobileMenuOpen(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleOpenNotification = (notification: AppNotification) => {
+    setSelectedNotification(notification);
+    setTrackerTarget(null);
+    setPage('notification');
     setMobileMenuOpen(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -149,6 +162,7 @@ function App() {
     { label: 'Search', page: 'search' as Page },
     { label: 'Countries', page: 'countries' as Page },
     { label: 'Watchlist', page: 'watchlist' as Page, badge: watchlist.length > 0 ? watchlist.length : undefined },
+    ...(token ? [{ label: 'Notifications', page: 'notifications' as Page }] : []),
     ...(user?.role === 'admin' ? [{ label: 'Admin', page: 'admin' as Page }] : []),
   ];
 
@@ -205,7 +219,7 @@ function App() {
             </div>
 
             <div className="flex items-center gap-2.5">
-              {token && <NotificationPanel token={token} />}
+              {token && <NotificationPanel token={token} onOpenNotification={handleOpenNotification} />}
               {user ? (
                 <div className="flex items-center gap-2">
                   <div className="hidden sm:flex items-center gap-2 pl-1.5 pr-2.5 py-1.5 rounded-full border border-white/8 bg-white/[0.03]">
@@ -364,6 +378,23 @@ function App() {
           </div>
         )}
 
+        {page === 'notifications' && token && (
+          <NotificationsPage
+            token={token}
+            onOpenNotification={handleOpenNotification}
+          />
+        )}
+
+        {page === 'notifications' && !token && (
+          <div className="max-w-lg mx-auto px-4 py-20 text-center space-y-4">
+            <h2 className="text-xl font-bold text-white">Sign in to view notifications</h2>
+            <p className="text-slate-400">Your species alerts and admin broadcasts are tied to your account.</p>
+            <button type="button" onClick={openSignIn} className="px-6 py-3 bg-emerald-500 text-white font-semibold rounded-full text-sm">
+              Sign in
+            </button>
+          </div>
+        )}
+
         {page === 'admin' && user?.role === 'admin' && token && (
           <div className="py-8"><AdminCenter token={token} /></div>
         )}
@@ -376,6 +407,14 @@ function App() {
               Go Home
             </button>
           </div>
+        )}
+
+        {page === 'notification' && (
+          <NotificationDetailPage
+            notification={selectedNotification}
+            onBack={() => goToPage(token ? 'notifications' : 'home')}
+            onOpenTracker={handleViewTracker}
+          />
         )}
       </main>
 

@@ -19,6 +19,7 @@ interface Occurrence {
   longitude: number;
   eventDate: string | null;
   country: string;
+  countryCode?: string | null;
   locality: string;
   basisOfRecord: string;
   gbifUrl: string | null;
@@ -28,19 +29,26 @@ interface SpeciesMapProps {
   taxonKey: number;
   scientificName: string;
   heightClass?: string;
+  selectedCountryCodes?: string[];
 }
 
-const SpeciesMap: React.FC<SpeciesMapProps> = ({ taxonKey, scientificName, heightClass = 'h-[620px] md:h-[720px]' }) => {
+const SpeciesMap: React.FC<SpeciesMapProps> = ({
+  taxonKey,
+  scientificName,
+  heightClass = 'h-[620px] md:h-[720px]',
+  selectedCountryCodes = [],
+}) => {
   const [occurrences, setOccurrences] = useState<Occurrence[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedOccurrence, setSelectedOccurrence] = useState<Occurrence | null>(null);
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [showSightings, setShowSightings] = useState(true);
-  const [recentOnly, setRecentOnly] = useState(false);
-  const [datedOnly, setDatedOnly] = useState(false);
   const [mapStyle, setMapStyle] = useState<'dark' | 'terrain'>('dark');
   const [fitNonce, setFitNonce] = useState(0);
   const [showRecordList, setShowRecordList] = useState(false);
+  const [yearMode, setYearMode] = useState<'any' | 'range'>('any');
+  const [yearRange, setYearRange] = useState<[number, number] | null>(null);
+  const [gbifYearRange, setGbifYearRange] = useState<[number, number] | null>(null);
 
   useEffect(() => {
     const fetchOccurrences = async () => {
@@ -62,18 +70,67 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({ taxonKey, scientificName, heigh
     fetchOccurrences();
   }, [taxonKey]);
 
-  const recentYearCutoff = new Date().getFullYear() - 5;
+  useEffect(() => {
+    const fetchYearFacet = async () => {
+      setGbifYearRange(null);
+      try {
+        const params = new URLSearchParams({
+          taxonKey: String(taxonKey),
+          limit: '0',
+          facet: 'year',
+          facetLimit: '1000',
+        });
+        const response = await fetch(`https://api.gbif.org/v1/occurrence/search?${params.toString()}`);
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const yearFacet = data.facets?.find((facet: { field?: string }) => facet.field === 'YEAR');
+        const years = (yearFacet?.counts || [])
+          .map((item: { name?: string }) => Number(item.name))
+          .filter((year: number) => Number.isFinite(year));
+
+        if (years.length > 0) {
+          setGbifYearRange([Math.min(...years), Math.max(...years)]);
+        }
+      } catch {
+        // Fall back to loaded occurrence points if GBIF facets are unavailable.
+      }
+    };
+
+    fetchYearFacet();
+  }, [taxonKey]);
+
+  const occurrenceYearRange = useMemo<[number, number] | null>(() => {
+    const years = occurrences
+      .map((occ) => occ.eventDate ? new Date(occ.eventDate).getFullYear() : null)
+      .filter((year): year is number => Number.isFinite(year));
+
+    if (years.length === 0) return null;
+    return [Math.min(...years), Math.max(...years)];
+  }, [occurrences]);
+
+  const availableYearRange = gbifYearRange ?? occurrenceYearRange;
+
+  useEffect(() => {
+    setYearMode('any');
+    setYearRange(availableYearRange);
+  }, [availableYearRange]);
+
+  const yearRangeActive = yearMode === 'range' && Boolean(availableYearRange && yearRange);
   const filteredOccurrences = useMemo(() => {
     return occurrences.filter((occ) => {
-      if (datedOnly && !occ.eventDate) return false;
-      if (recentOnly) {
+      if (selectedCountryCodes.length > 0) {
+        const code = occ.countryCode?.toUpperCase();
+        if (!code || !selectedCountryCodes.includes(code)) return false;
+      }
+      if (yearRangeActive && yearRange) {
         if (!occ.eventDate) return false;
         const year = new Date(occ.eventDate).getFullYear();
-        if (!Number.isFinite(year) || year < recentYearCutoff) return false;
+        if (!Number.isFinite(year) || year < yearRange[0] || year > yearRange[1]) return false;
       }
       return true;
     });
-  }, [datedOnly, occurrences, recentOnly, recentYearCutoff]);
+  }, [occurrences, selectedCountryCodes, yearRange, yearRangeActive]);
 
   const countriesObserved = useMemo(() => {
     return Array.from(new Set(filteredOccurrences.map((occ) => occ.country).filter(Boolean)));
@@ -87,7 +144,29 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({ taxonKey, scientificName, heigh
 
   // GBIF Tile API URL for density heatmap (using classic.poly for shaded area)
   // IMPORTANT: 'bin=hex' or 'bin=square' is required for poly-style rendering
-  const gbifTileUrl = `https://api.gbif.org/v2/map/occurrence/density/{z}/{x}/{y}@1x.png?srs=EPSG:3857&taxonKey=${taxonKey}&style=classic.poly&bin=hex`;
+  const gbifTileUrls = useMemo(() => {
+    const buildUrl = (countryCode?: string) => {
+      const params = new URLSearchParams({
+        srs: 'EPSG:3857',
+        taxonKey: String(taxonKey),
+        style: 'classic.poly',
+        bin: 'hex',
+      });
+      if (countryCode) {
+        params.set('country', countryCode);
+      }
+      if (yearMode === 'range' && availableYearRange && yearRange) {
+        params.set('year', `${yearRange[0]},${yearRange[1]}`);
+      }
+      return `https://api.gbif.org/v2/map/occurrence/density/{z}/{x}/{y}@1x.png?${params.toString()}`;
+    };
+
+    if (selectedCountryCodes.length > 0) {
+      return selectedCountryCodes.map((code) => buildUrl(code));
+    }
+
+    return [buildUrl()];
+  }, [availableYearRange, selectedCountryCodes, taxonKey, yearMode, yearRange]);
   const tileUrl = mapStyle === 'dark'
     ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
     : 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png';
@@ -106,11 +185,11 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({ taxonKey, scientificName, heigh
   const MapViewport = ({
     points,
     selected,
-    fitVersion,
+    fitKey,
   }: {
     points: Occurrence[];
     selected: Occurrence | null;
-    fitVersion: number;
+    fitKey: string;
   }) => {
     const map = useMap();
 
@@ -125,22 +204,104 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({ taxonKey, scientificName, heigh
       if (points.length === 0) return;
       const bounds = L.latLngBounds(points.map((point) => [point.latitude, point.longitude]));
       map.fitBounds(bounds, { padding: [40, 40], maxZoom: 6 });
-    }, [fitVersion, map, points]);
+    }, [fitKey, map, points]);
 
     return null;
   };
 
   const selectedKey = selectedOccurrence?.key ?? null;
   const formatDate = (value: string | null) => value ? new Date(value).toLocaleDateString() : 'Unknown';
+  const setStartYear = (value: number) => {
+    if (!availableYearRange || !yearRange) return;
+    const next = Math.max(availableYearRange[0], Math.min(value, yearRange[1]));
+    setYearRange([next, yearRange[1]]);
+  };
+  const setEndYear = (value: number) => {
+    if (!availableYearRange || !yearRange) return;
+    const next = Math.min(availableYearRange[1], Math.max(value, yearRange[0]));
+    setYearRange([yearRange[0], next]);
+  };
   const controls = [
     { label: 'Heatmap', shortLabel: 'Heat', active: showHeatmap, onClick: () => setShowHeatmap((value) => !value) },
     { label: 'Sightings', shortLabel: 'Pts', active: showSightings, onClick: () => setShowSightings((value) => !value) },
-    { label: 'Records from the last 5 years', shortLabel: 'Recent 5y', active: recentOnly, onClick: () => setRecentOnly((value) => !value) },
-    { label: 'Only records with observation dates', shortLabel: 'Has date', active: datedOnly, onClick: () => setDatedOnly((value) => !value) },
   ];
+  const rangePercent = (year: number) => {
+    if (!availableYearRange || availableYearRange[0] === availableYearRange[1]) return 0;
+    return ((year - availableYearRange[0]) / (availableYearRange[1] - availableYearRange[0])) * 100;
+  };
+  const startPercent = yearRange ? rangePercent(yearRange[0]) : 0;
+  const endPercent = yearRange ? rangePercent(yearRange[1]) : 100;
+  const sliderThumbClass = "pointer-events-none absolute inset-x-0 top-0 h-8 w-full appearance-none bg-transparent [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:h-5 [&::-moz-range-thumb]:w-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-slate-950 [&::-moz-range-thumb]:bg-emerald-200 [&::-moz-range-thumb]:shadow-[0_0_0_1px_rgba(52,211,153,0.45),0_0_18px_rgba(52,211,153,0.35)] [&::-moz-range-track]:bg-transparent [&::-webkit-slider-runnable-track]:bg-transparent [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-slate-950 [&::-webkit-slider-thumb]:bg-emerald-200 [&::-webkit-slider-thumb]:shadow-[0_0_0_1px_rgba(52,211,153,0.45),0_0_18px_rgba(52,211,153,0.35)]";
+  const yearFilterControl = availableYearRange && yearRange ? (
+    <div className="rounded-b-[1.75rem] border border-t-0 border-white/8 bg-slate-950/88 px-4 py-3 text-slate-400 shadow-2xl backdrop-blur-xl">
+      <div className="flex min-h-10 items-center gap-4">
+        <button
+          type="button"
+          onClick={() => setYearMode('any')}
+          aria-pressed={yearMode === 'any'}
+          className={`h-8 shrink-0 rounded-full border px-4 text-xs font-black transition-colors ${
+            yearMode === 'any'
+              ? 'border-emerald-400/35 bg-emerald-400/15 text-emerald-100'
+              : 'border-white/8 bg-white/[0.04] text-slate-400 hover:bg-white/[0.08] hover:text-slate-200'
+          }`}
+        >
+          Any year
+        </button>
+        <button
+          type="button"
+          onClick={() => setYearMode('range')}
+          aria-pressed={yearMode === 'range'}
+          className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-black transition-colors ${
+            yearMode === 'range'
+              ? 'border-cyan-400/30 bg-cyan-400/12 text-cyan-100'
+              : 'border-transparent text-slate-500 hover:text-slate-300'
+          }`}
+        >
+          {yearRange[0]} - {yearRange[1]}
+        </button>
+        <div className="relative h-8 flex-1">
+          <div className="absolute left-0 right-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/10" />
+          {yearMode === 'range' && (
+            <div
+              className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-gradient-to-r from-emerald-300 to-cyan-300 shadow-[0_0_16px_rgba(34,211,238,0.25)]"
+              style={{ left: `${startPercent}%`, right: `${100 - endPercent}%` }}
+            />
+          )}
+          <input
+            type="range"
+            min={availableYearRange[0]}
+            max={availableYearRange[1]}
+            value={yearRange[0]}
+            onChange={(event) => {
+              setYearMode('range');
+              setStartYear(Number(event.target.value));
+            }}
+            className={sliderThumbClass}
+            aria-label="Start year"
+          />
+          <input
+            type="range"
+            min={availableYearRange[0]}
+            max={availableYearRange[1]}
+            value={yearRange[1]}
+            onChange={(event) => {
+              setYearMode('range');
+              setEndYear(Number(event.target.value));
+            }}
+            className={sliderThumbClass}
+            aria-label="End year"
+          />
+        </div>
+        <span className="hidden shrink-0 text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-600 md:block">
+          Year filter
+        </span>
+      </div>
+    </div>
+  ) : null;
 
   return (
-    <div className={`${heightClass} w-full rounded-[1.75rem] overflow-hidden border border-white/8 shadow-2xl relative bg-slate-950`}>
+    <div className="w-full">
+    <div className={`${heightClass} w-full ${yearFilterControl ? 'rounded-t-[1.75rem]' : 'rounded-[1.75rem]'} overflow-hidden border border-white/8 shadow-2xl relative bg-slate-950`}>
       {loading && (
         <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm z-[1000] flex items-center justify-center">
           <div className="flex flex-col items-center gap-4">
@@ -149,7 +310,7 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({ taxonKey, scientificName, heigh
           </div>
         </div>
       )}
-      
+
       <div className="absolute top-4 right-4 z-[1000] pointer-events-none">
         <div className="pointer-events-auto w-[190px] rounded-xl border border-white/10 bg-slate-950/72 backdrop-blur-md p-2 shadow-xl">
           <div className="mb-2 flex items-center justify-between px-1">
@@ -304,19 +465,20 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({ taxonKey, scientificName, heigh
         scrollWheelZoom={true}
       >
         <ResizeMap />
-        <MapViewport points={filteredOccurrences} selected={selectedOccurrence} fitVersion={fitNonce} />
+          <MapViewport points={filteredOccurrences} selected={selectedOccurrence} fitKey={`${fitNonce}:${selectedCountryCodes.join(',')}:${yearRange?.join('-') ?? 'all'}`} />
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://www.gbif.org">GBIF</a>'
           url={tileUrl}
         />
         
         {/* GBIF Heatmap Layer */}
-        {showHeatmap && (
+        {showHeatmap && gbifTileUrls.map((url) => (
           <TileLayer
-            url={gbifTileUrl}
-            opacity={0.8}
+            key={url}
+            url={url}
+            opacity={selectedCountryCodes.length > 1 ? 0.72 : 0.8}
           />
-        )}
+        ))}
 
         {/* Recent Sightings Circle Markers */}
         {showSightings && filteredOccurrences.map((occ) => {
@@ -364,6 +526,8 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({ taxonKey, scientificName, heigh
         );
         })}
       </MapContainer>
+    </div>
+    {yearFilterControl}
     </div>
   );
 };

@@ -121,10 +121,6 @@ class SpeciesController extends Controller
     {
         $species = $this->speciesService->getSpeciesByCountry($countryName);
 
-        if (empty($species)) {
-            return response()->json(['message' => 'No species found for this country'], 404);
-        }
-
         return response()->json($species);
     }
 }

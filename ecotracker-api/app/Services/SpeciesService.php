@@ -10,6 +10,13 @@ class SpeciesService
 {
     protected string $baseUrl = 'https://api.gbif.org/v1';
 
+    private function gbifHttp(): \Illuminate\Http\Client\PendingRequest
+    {
+        return Http::connectTimeout(5)
+            ->timeout(12)
+            ->retry(2, 250);
+    }
+
     /**
      * Search for species by name using GBIF API.
      *
@@ -36,7 +43,7 @@ class SpeciesService
             $queryString .= '&qField=VERNACULAR&qField=SCIENTIFIC';
             $queryString .= $this->buildHigherTaxonQuery($filters['kingdom'] ?? null);
 
-            $response = Http::get("{$this->baseUrl}/species/search?{$queryString}");
+            $response = $this->gbifHttp()->get("{$this->baseUrl}/species/search?{$queryString}");
 
             if ($response->successful()) {
                 $data = $response->json();
@@ -48,7 +55,7 @@ class SpeciesService
                         foreach ($data['results'] as $index => $species) {
                             $key = $species['key'] ?? null;
                             if ($key) {
-                                $requests[$index] = $pool->as((string)$index)->get("{$this->baseUrl}/species/{$key}/iucnRedListCategory");
+                                $requests[$index] = $pool->as((string)$index)->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/species/{$key}/iucnRedListCategory");
                             }
                         }
                         return $requests;
@@ -56,12 +63,7 @@ class SpeciesService
 
                     // Map responses back to results
                     foreach ($data['results'] as $index => &$species) {
-                        $iucnResponse = $responses[(string)$index] ?? null;
-                        if ($iucnResponse && $iucnResponse->successful()) {
-                            $species['iucnRedListStatus'] = $iucnResponse->json();
-                        } else {
-                            $species['iucnRedListStatus'] = null;
-                        }
+                        $species['iucnRedListStatus'] = $this->successfulJson($responses[(string)$index] ?? null, null);
                     }
                 }
 
@@ -72,7 +74,7 @@ class SpeciesService
 
             Log::error("GBIF API search failed: " . $response->body());
             return [];
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error("Exception during GBIF API search: " . $e->getMessage());
             return [];
         }
@@ -163,7 +165,7 @@ class SpeciesService
             
             $queryString .= '&qField=VERNACULAR&qField=SCIENTIFIC&highertaxonKey=1&highertaxonKey=5&highertaxonKey=6';
 
-            $response = Http::get("{$this->baseUrl}/species/search?{$queryString}");
+            $response = $this->gbifHttp()->get("{$this->baseUrl}/species/search?{$queryString}");
 
             if ($response->successful()) {
                 $data = $response->json();
@@ -172,7 +174,7 @@ class SpeciesService
 
             Log::error("GBIF API suggest failed: " . $response->body());
             return [];
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error("Exception during GBIF API suggest: " . $e->getMessage());
             return [];
         }
@@ -187,25 +189,21 @@ class SpeciesService
     public function getDetails(int $usageKey): array
     {
         try {
-            $response = Http::get("{$this->baseUrl}/species/{$usageKey}");
+            $response = $this->gbifHttp()->get("{$this->baseUrl}/species/{$usageKey}");
 
             if ($response->successful()) {
                 $details = $response->json();
 
                 // Attempt to fetch IUCN Red List status
-                $iucnResponse = Http::get("{$this->baseUrl}/species/{$usageKey}/iucnRedListCategory");
-                if ($iucnResponse->successful()) {
-                    $details['iucnRedListStatus'] = $iucnResponse->json();
-                } else {
-                    $details['iucnRedListStatus'] = null; // Status not found or unavailable
-                }
+                $iucnResponse = $this->gbifHttp()->get("{$this->baseUrl}/species/{$usageKey}/iucnRedListCategory");
+                $details['iucnRedListStatus'] = $this->successfulJson($iucnResponse, null);
 
                 return $details;
             }
 
             Log::error("GBIF API details failed: " . $response->body());
             return [];
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error("Exception during GBIF API details fetch: " . $e->getMessage());
             return [];
         }
@@ -223,7 +221,7 @@ class SpeciesService
         try {
             $limit = max(1, min($limit, 500));
 
-            $response = Http::get("{$this->baseUrl}/occurrence/search", [
+            $response = $this->gbifHttp()->get("{$this->baseUrl}/occurrence/search", [
                 'taxonKey' => $usageKey,
                 'basisOfRecord' => 'HUMAN_OBSERVATION',
                 'limit' => $limit,
@@ -236,7 +234,7 @@ class SpeciesService
 
             Log::error("GBIF API occurrence search failed: " . $response->body());
             return [];
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error("Exception during GBIF API occurrence search: " . $e->getMessage());
             return [];
         }
@@ -290,6 +288,19 @@ class SpeciesService
         return $latitude >= -90 && $latitude <= 90 && $longitude >= -180 && $longitude <= 180;
     }
 
+    private function successfulJson(mixed $response, mixed $fallback = []): mixed
+    {
+        if (!is_object($response) || !method_exists($response, 'successful') || !$response->successful()) {
+            if ($response instanceof \Throwable) {
+                Log::warning("GBIF pooled request failed: " . $response->getMessage());
+            }
+
+            return $fallback;
+        }
+
+        return $response->json();
+    }
+
     /**
      * Get professional tracker metrics for a species.
      *
@@ -308,31 +319,31 @@ class SpeciesService
                 $occQuery .= '&facet=year&facet=country&facet=basisOfRecord&facet=issue&facet=month';
 
                 return [
-                    $pool->as('details')->get("{$this->baseUrl}/species/{$usageKey}"),
-                    $pool->as('iucn')->get("{$this->baseUrl}/species/{$usageKey}/iucnRedListCategory"),
-                    $pool->as('occurrences')->get("{$this->baseUrl}/occurrence/search?{$occQuery}"),
-                    $pool->as('coordinateOccurrences')->get("{$this->baseUrl}/occurrence/search", [
+                    $pool->as('details')->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/species/{$usageKey}"),
+                    $pool->as('iucn')->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/species/{$usageKey}/iucnRedListCategory"),
+                    $pool->as('occurrences')->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/occurrence/search?{$occQuery}"),
+                    $pool->as('coordinateOccurrences')->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/occurrence/search", [
                         'taxonKey' => $usageKey,
                         'hasCoordinate' => 'true',
                         'limit' => 1,
                     ]),
-                    $pool->as('mediaOccurrences')->get("{$this->baseUrl}/occurrence/search", [
+                    $pool->as('mediaOccurrences')->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/occurrence/search", [
                         'taxonKey' => $usageKey,
                         'mediaType' => 'StillImage',
                         'limit' => 1,
                     ]),
-                    $pool->as('descriptions')->get("{$this->baseUrl}/species/{$usageKey}/descriptions"),
-                    $pool->as('media')->get("{$this->baseUrl}/species/{$usageKey}/media"),
+                    $pool->as('descriptions')->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/species/{$usageKey}/descriptions"),
+                    $pool->as('media')->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/species/{$usageKey}/media"),
                 ];
             });
 
-            $details = isset($responses['details']) && $responses['details']->successful() ? $responses['details']->json() : [];
-            $iucn = isset($responses['iucn']) && $responses['iucn']->successful() ? $responses['iucn']->json() : null;
-            $occData = isset($responses['occurrences']) && $responses['occurrences']->successful() ? $responses['occurrences']->json() : [];
-            $coordinateOccData = isset($responses['coordinateOccurrences']) && $responses['coordinateOccurrences']->successful() ? $responses['coordinateOccurrences']->json() : [];
-            $mediaOccData = isset($responses['mediaOccurrences']) && $responses['mediaOccurrences']->successful() ? $responses['mediaOccurrences']->json() : [];
-            $descData = isset($responses['descriptions']) && $responses['descriptions']->successful() ? $responses['descriptions']->json() : [];
-            $mediaData = isset($responses['media']) && $responses['media']->successful() ? $responses['media']->json() : [];
+            $details = $this->successfulJson($responses['details'] ?? null, []);
+            $iucn = $this->successfulJson($responses['iucn'] ?? null, null);
+            $occData = $this->successfulJson($responses['occurrences'] ?? null, []);
+            $coordinateOccData = $this->successfulJson($responses['coordinateOccurrences'] ?? null, []);
+            $mediaOccData = $this->successfulJson($responses['mediaOccurrences'] ?? null, []);
+            $descData = $this->successfulJson($responses['descriptions'] ?? null, []);
+            $mediaData = $this->successfulJson($responses['media'] ?? null, []);
 
             // Process images with map filtering
             $images = [];
@@ -352,11 +363,17 @@ class SpeciesService
             }
 
             // Fallback & Photo Prioritization: Check occurrences for real photos (usually iNaturalist)
-            $occWithMedia = Http::get("{$this->baseUrl}/occurrence/search", [
-                'taxonKey' => $usageKey,
-                'mediaType' => 'StillImage',
-                'limit' => 10
-            ])->json();
+            try {
+                $occWithMediaResponse = $this->gbifHttp()->get("{$this->baseUrl}/occurrence/search", [
+                    'taxonKey' => $usageKey,
+                    'mediaType' => 'StillImage',
+                    'limit' => 10
+                ]);
+                $occWithMedia = $this->successfulJson($occWithMediaResponse, []);
+            } catch (\Throwable $e) {
+                Log::warning("GBIF media occurrence fallback failed: " . $e->getMessage());
+                $occWithMedia = [];
+            }
 
             $photos = [];
             foreach ($occWithMedia['results'] ?? [] as $occ) {
@@ -435,10 +452,46 @@ class SpeciesService
                     'tileUrl' => "https://api.gbif.org/v2/map/occurrence/density/{z}/{x}/{y}@1x.png?taxonKey={$usageKey}&style=purpleHeat.poly"
                 ]
             ];
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error("Exception during GBIF tracker metrics fetch: " . $e->getMessage());
-            return [];
+            return $this->fallbackTrackerMetrics($usageKey);
         }
+    }
+
+    private function fallbackTrackerMetrics(int $usageKey): array
+    {
+        return [
+            'identity' => [
+                'usageKey' => $usageKey,
+                'scientificName' => 'Unknown',
+                'canonicalName' => 'Unknown',
+                'family' => 'Unknown',
+                'kingdom' => 'Unknown',
+            ],
+            'conservation' => [
+                'status' => 'NE',
+                'statusLabel' => 'Not Evaluated',
+                'isExtinct' => false,
+            ],
+            'trackerStats' => [
+                'globalSightings' => 0,
+                'sightingsThisYear' => 0,
+                'countriesObserved' => [],
+                'lastObserved' => null,
+            ],
+            'monitoring' => [
+                'yearlyTrend' => $this->buildYearlyTrend([]),
+                'dataConfidence' => $this->buildDataConfidence(0, 0, 0, []),
+                'recordTypes' => [],
+                'seasonality' => $this->buildSeasonality([]),
+            ],
+            'threats' => [],
+            'images' => [],
+            'mapConfig' => [
+                'taxonKey' => $usageKey,
+                'tileUrl' => "https://api.gbif.org/v2/map/occurrence/density/{z}/{x}/{y}@1x.png?taxonKey={$usageKey}&style=purpleHeat.poly",
+            ],
+        ];
     }
 
     private function buildYearlyTrend(array $yearFacet): array
@@ -592,7 +645,7 @@ class SpeciesService
 
             $url = "{$this->baseUrl}/occurrence/search?{$queryString}";
             Log::info("Fetching GBIF occurrences for species by country code: {$countryCode}, URL: {$url}");
-            $response = Http::get($url);
+            $response = $this->gbifHttp()->get($url);
 
             $uniqueSpecies = [];
             if ($response->successful()) {
@@ -621,8 +674,8 @@ class SpeciesService
                 $responses = Http::pool(function (Pool $pool) use ($taxonKeys) {
                     $requests = [];
                     foreach ($taxonKeys as $key) {
-                        $requests[] = $pool->as("details_{$key}")->get("{$this->baseUrl}/species/{$key}");
-                        $requests[] = $pool->as("vernacular_{$key}")->get("{$this->baseUrl}/species/{$key}/vernacularNames");
+                        $requests[] = $pool->as("details_{$key}")->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/species/{$key}");
+                        $requests[] = $pool->as("vernacular_{$key}")->connectTimeout(5)->timeout(12)->get("{$this->baseUrl}/species/{$key}/vernacularNames");
                     }
                     return $requests;
                 });
@@ -631,14 +684,14 @@ class SpeciesService
                     $res = $responses["details_{$key}"] ?? null;
                     $vernacularRes = $responses["vernacular_{$key}"] ?? null;
                     $vernacularName = $info['common_name'] ?? null;
-                    if ($res && $res->successful()) {
-                        $speciesDetails = $res->json();
+                    $speciesDetails = $this->successfulJson($res, []);
+                    if (!empty($speciesDetails)) {
                         $vernacularName = $vernacularName ?: ($speciesDetails['vernacularName'] ?? null);
                         $info['family'] = $speciesDetails['family'] ?? null;
                         $info['kingdom'] = $speciesDetails['kingdom'] ?? null;
                     }
-                    if (!$vernacularName && $vernacularRes && $vernacularRes->successful()) {
-                        $names = $vernacularRes->json()['results'] ?? [];
+                    if (!$vernacularName) {
+                        $names = $this->successfulJson($vernacularRes, [])['results'] ?? [];
                         $english = collect($names)->first(function ($name) {
                             $language = strtolower((string)($name['language'] ?? ''));
                             return in_array($language, ['eng', 'en', 'english'], true);
@@ -670,7 +723,7 @@ class SpeciesService
 
             Log::info("Found " . count($allSpecies) . " unique species for country code: {$countryCode}");
             return $allSpecies;
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error("Exception during GBIF API speciesByCountry fetch: " . $e->getMessage());
             return [];
         }

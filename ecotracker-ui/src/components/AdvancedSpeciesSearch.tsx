@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { API_BASE_URL, type WatchlistItem, type WatchlistPayload } from '../api';
 import type { Species } from './SpeciesSearch';
 
@@ -55,21 +55,49 @@ const AdvancedSpeciesSearch: React.FC<AdvancedSpeciesSearchProps> = ({
   const [rank, setRank] = useState('SPECIES');
   const [limit, setLimit] = useState(40);
   const [results, setResults] = useState<Species[]>([]);
+  const [suggestions, setSuggestions] = useState<Species[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
 
-  const handleSearch = async (event?: React.FormEvent) => {
-    event?.preventDefault();
-    if (query.trim().length < 2) return;
+  useEffect(() => {
+    if (query.trim().length < 2) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
 
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/species/suggest?query=${encodeURIComponent(query.trim())}`);
+        if (response.ok) {
+          const data = await response.json();
+          setSuggestions(data || []);
+          setShowSuggestions(true);
+        }
+      } catch {
+        // Suggestions should not block the main search flow.
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  const handleSearch = async (event?: React.FormEvent, explicitQuery?: string) => {
+    event?.preventDefault();
+    const searchQuery = (explicitQuery || query).trim();
+    if (searchQuery.length < 2) return;
+
+    setQuery(searchQuery);
+    setShowSuggestions(false);
     setLoading(true);
     setError(null);
     setSearched(true);
 
     try {
       const params = new URLSearchParams({
-        query: query.trim(),
+        query: searchQuery,
         rank,
         limit: String(limit),
       });
@@ -103,7 +131,7 @@ const AdvancedSpeciesSearch: React.FC<AdvancedSpeciesSearchProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8 space-y-6">
-      <section className="rounded-2xl border border-white/8 bg-slate-950/55 backdrop-blur-xl p-5 md:p-6">
+      <section className="relative z-30 rounded-2xl border border-white/8 bg-slate-950/55 backdrop-blur-xl p-5 md:p-6">
         <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="text-[10px] uppercase tracking-[0.28em] text-emerald-300 font-semibold">Advanced Search</p>
@@ -116,12 +144,37 @@ const AdvancedSpeciesSearch: React.FC<AdvancedSpeciesSearchProps> = ({
         </div>
 
         <form onSubmit={handleSearch} className="mt-6 grid grid-cols-1 lg:grid-cols-[minmax(240px,1fr)_170px_170px_150px_130px] gap-3">
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Species name, common name, or scientific name"
-            className="h-11 rounded-xl border border-white/10 bg-white/5 px-4 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-emerald-400/50"
-          />
+          <div className="relative">
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
+              onBlur={() => window.setTimeout(() => setShowSuggestions(false), 180)}
+              placeholder="Species name, common name, or scientific name"
+              className="h-11 w-full rounded-xl border border-white/10 bg-white/5 px-4 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-emerald-400/50"
+            />
+            {showSuggestions && suggestions.length > 0 && (
+              <div className="absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-2xl border border-white/10 bg-slate-950/98 shadow-2xl backdrop-blur-xl">
+                {suggestions.map((suggestion) => (
+                  <button
+                    key={suggestion.key}
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => handleSearch(undefined, getDisplayName(suggestion))}
+                    className="flex w-full items-center gap-3 border-b border-white/5 px-4 py-3 text-left last:border-0 hover:bg-white/[0.05]"
+                  >
+                    <svg className="h-3.5 w-3.5 flex-shrink-0 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                    </svg>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-200">{getDisplayName(suggestion)}</p>
+                      <p className="truncate text-xs italic text-slate-500">{suggestion.scientificName}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <select value={status} onChange={(event) => setStatus(event.target.value)} className="h-11 rounded-xl border border-white/10 bg-slate-950 px-3 text-sm text-slate-200 outline-none focus:border-emerald-400/50">
             <option value="">All statuses</option>
             {STATUS_OPTIONS.map((option) => <option key={option.code} value={option.code}>{option.code} - {option.label}</option>)}
@@ -149,7 +202,7 @@ const AdvancedSpeciesSearch: React.FC<AdvancedSpeciesSearchProps> = ({
 
       {error && <div className="rounded-2xl border border-red-500/25 bg-red-950/25 p-4 text-sm text-red-300">{error}</div>}
 
-      <section className="rounded-2xl border border-white/8 bg-slate-950/40 backdrop-blur-xl p-4 md:p-5">
+      <section className="relative z-10 rounded-2xl border border-white/8 bg-slate-950/40 backdrop-blur-xl p-4 md:p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-white">{searched ? `${results.length} matching records` : 'Search results'}</h2>
           <span className="text-[10px] uppercase tracking-[0.2em] text-slate-500">CR first</span>

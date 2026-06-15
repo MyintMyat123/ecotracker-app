@@ -39,7 +39,7 @@ export interface WatchlistPayload {
 export interface AppNotification {
   id: number;
   user_id: number;
-  type: 'watchlist_update' | 'status_change' | 'new_sighting' | 'system';
+  type: 'watchlist_add' | 'watchlist_update' | 'status_change' | 'new_sighting' | 'system';
   title: string;
   message: string;
   data: Record<string, unknown> | null;
