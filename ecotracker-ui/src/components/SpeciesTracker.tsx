@@ -1,7 +1,8 @@
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
 import React, { useEffect, useState } from 'react';
 import { API_BASE_URL, type WatchlistPayload } from '../api';
 import SpeciesMap from './SpeciesMap';
-import AiOverview from './AiOverview';
 
 interface TrackerData {
   identity: {
@@ -136,6 +137,7 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
   const [showAllCountries, setShowAllCountries] = useState(false);
   const [selectedMapCountries, setSelectedMapCountries] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'monitoring' | 'ecology' | 'gallery'>('monitoring');
+  const [generatingPdf, setGeneratingPdf] = useState(false);
 
   useEffect(() => {
     const fetchTrackerData = async () => {
@@ -244,6 +246,406 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
     : data.monitoring.yearlyTrend.direction === 'down'
       ? 'Observation activity declining'
       : 'Observation activity stable';
+  const galleryImages = Array.from(new Set(data.images.filter(Boolean)));
+  const reportFileName = `${(commonName || data.identity.canonicalName || 'species')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '') || 'species'}-report.html`;
+  type PdfLine = { text: string; size?: number; bold?: boolean; gap?: number };
+  const cleanPdfText = (value: string | number | null | undefined) =>
+    String(value ?? '')
+      .replace(/[–—]/g, '-')
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const escapePdfText = (value: string) =>
+    cleanPdfText(value).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  const wrapPdfText = (text: string, maxChars: number) => {
+    const words = cleanPdfText(text).split(/\s+/).filter(Boolean);
+    const lines: string[] = [];
+    let current = '';
+
+    words.forEach((word) => {
+      const next = current ? `${current} ${word}` : word;
+      if (next.length > maxChars && current) {
+        lines.push(current);
+        current = word;
+      } else {
+        current = next;
+      }
+    });
+
+    if (current) lines.push(current);
+    return lines.length ? lines : [''];
+  };
+  const buildPdf = (lines: PdfLine[]) => {
+    const pageWidth = 595;
+    const pageHeight = 842;
+    const margin = 48;
+    const contentWidth = pageWidth - margin * 2;
+    const pages: PdfLine[][] = [];
+    let page: PdfLine[] = [];
+    let y = pageHeight - margin;
+
+    const pushPage = () => {
+      pages.push(page);
+      page = [];
+      y = pageHeight - margin;
+    };
+
+    lines.forEach((line) => {
+      const size = line.size ?? 10;
+      const lineHeight = Math.max(13, size + 4);
+      const gap = line.gap ?? 0;
+      const maxChars = Math.max(32, Math.floor(contentWidth / (size * 0.52)));
+      const wrapped = line.text === '' ? [''] : wrapPdfText(line.text, maxChars);
+
+      wrapped.forEach((text, index) => {
+        if (y - lineHeight < margin) pushPage();
+        page.push({ ...line, text });
+        y -= lineHeight;
+        if (index === wrapped.length - 1 && gap) y -= gap;
+      });
+    });
+
+    if (page.length) pages.push(page);
+
+    const objects: string[] = [];
+    const addObject = (content: string) => {
+      objects.push(content);
+      return objects.length;
+    };
+    const catalogId = addObject('<< /Type /Catalog /Pages 2 0 R >>');
+    const pagesId = addObject('');
+    const fontId = addObject('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+    const boldFontId = addObject('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>');
+    const pageIds: number[] = [];
+
+    pages.forEach((pageLines, pageIndex) => {
+      let cursorY = pageHeight - margin;
+      const stream = pageLines.map((line) => {
+        const size = line.size ?? 10;
+        const lineHeight = Math.max(13, size + 4);
+        cursorY -= lineHeight;
+        const fontRef = line.bold ? 'F2' : 'F1';
+        return `BT /${fontRef} ${size} Tf ${margin} ${cursorY.toFixed(2)} Td (${escapePdfText(line.text)}) Tj ET`;
+      }).join('\n');
+      const footer = `BT /F1 8 Tf ${pageWidth - margin - 70} 24 Td (Page ${pageIndex + 1} of ${pages.length}) Tj ET`;
+      const fullStream = `${stream}\n${footer}`;
+      const contentId = addObject(`<< /Length ${fullStream.length} >>\nstream\n${fullStream}\nendstream`);
+      const pageId = addObject(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 ${fontId} 0 R /F2 ${boldFontId} 0 R >> >> /Contents ${contentId} 0 R >>`);
+      pageIds.push(pageId);
+    });
+
+    objects[pagesId - 1] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pageIds.length} >>`;
+
+    let pdf = '%PDF-1.4\n';
+    const offsets = [0];
+    objects.forEach((object, index) => {
+      offsets.push(pdf.length);
+      pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+    });
+    const xrefOffset = pdf.length;
+    pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+    offsets.slice(1).forEach((offset) => {
+      pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+    });
+    pdf += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+
+    return pdf;
+  };
+  void buildPdf;
+  const downloadSpeciesReport = () => {
+    const status = `${data.conservation.status} - ${data.conservation.statusLabel}`;
+    const escapeHtml = (value: string | number | null | undefined) =>
+      String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    const yearlyRows = data.monitoring.yearlyTrend.yearlyCounts
+      .map((item) => `<tr><td>${escapeHtml(item.year)}</td><td>${escapeHtml(item.count.toLocaleString())}</td></tr>`)
+      .join('');
+    const monthlyRows = data.monitoring.seasonality.monthlyCounts
+      .map((item) => `<tr><td>${escapeHtml(item.label)}</td><td>${escapeHtml(item.count.toLocaleString())}</td></tr>`)
+      .join('');
+    const evidenceRows = (data.monitoring.recordTypes.length > 0 ? data.monitoring.recordTypes : [{ name: 'Unknown', count: 0 }])
+      .map((item) => `<tr><td>${escapeHtml(formatFacetName(item.name))}</td><td>${escapeHtml(item.count.toLocaleString())}</td></tr>`)
+      .join('');
+    const issueItems = data.monitoring.dataConfidence.topIssues.length
+      ? data.monitoring.dataConfidence.topIssues.map((item) => `<li>${escapeHtml(formatFacetName(item.name))}: ${escapeHtml(item.count.toLocaleString())}</li>`).join('')
+      : '<li>No major GBIF issues reported in the sampled facets.</li>';
+    const countryItems = data.trackerStats.countriesObserved.length
+      ? data.trackerStats.countriesObserved.map((country) => `<li>${escapeHtml(country)} - ${escapeHtml(getCountryName(country))}</li>`).join('')
+      : '<li>No country facet data available.</li>';
+    const ecologicalSections = threatGroups.length
+      ? threatGroups.map(([type, descriptions]) => `
+          <article class="note">
+            <h3>${escapeHtml(formatFacetName(type))}</h3>
+            ${descriptions.map((desc) => `<p>${escapeHtml(desc)}</p>`).join('')}
+          </article>
+        `).join('')
+      : '<p>No ecological note sections are available for this species.</p>';
+    const galleryMarkup = galleryImages.length
+      ? galleryImages.map((img, index) => `
+          <figure>
+            <img src="${escapeHtml(img)}" alt="${escapeHtml(commonName)} photo ${index + 1}" />
+            <figcaption>Photo ${index + 1}</figcaption>
+          </figure>
+        `).join('')
+      : '<p>No field photos are available for this species.</p>';
+    const lastObserved = data.trackerStats.lastObserved
+      ? new Date(data.trackerStats.lastObserved).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : 'N/A';
+    const generatedAt = new Date().toLocaleString();
+    const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(commonName)} Species Report</title>
+  <style>
+    body { margin: 0; background: #f7fafc; color: #0f172a; font-family: Inter, Segoe UI, Arial, sans-serif; line-height: 1.55; }
+    main { max-width: 1040px; margin: 0 auto; padding: 36px 24px 56px; }
+    header, section { background: #fff; border: 1px solid #dbe4ef; border-radius: 18px; padding: 24px; margin-bottom: 18px; box-shadow: 0 18px 45px rgba(15, 23, 42, 0.06); }
+    h1, h2, h3 { margin: 0; line-height: 1.2; }
+    h1 { font-size: 34px; }
+    h2 { font-size: 22px; margin-bottom: 14px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; }
+    h3 { font-size: 16px; margin-bottom: 8px; }
+    .subtitle { color: #475569; font-style: italic; margin: 8px 0 0; }
+    .meta { color: #64748b; font-size: 12px; margin-top: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+    .metric { border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; background: #f8fafc; }
+    .metric span { display: block; color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; }
+    .metric strong { display: block; margin-top: 6px; font-size: 22px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border-bottom: 1px solid #e2e8f0; padding: 8px 6px; text-align: left; font-size: 14px; }
+    ul { margin-top: 8px; }
+    .note { border: 1px solid #e2e8f0; border-radius: 14px; padding: 16px; background: #fbfdff; margin: 12px 0; }
+    .gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+    figure { margin: 0; border: 1px solid #e2e8f0; border-radius: 14px; overflow: hidden; background: #fff; }
+    figure img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: block; }
+    figcaption { padding: 8px 10px; color: #64748b; font-size: 12px; }
+    @media print { body { background: #fff; } header, section { box-shadow: none; break-inside: avoid; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>${escapeHtml(commonName)}</h1>
+      <p class="subtitle">${escapeHtml(data.identity.scientificName)}</p>
+      <p class="meta">Generated by EcoTracker on ${escapeHtml(generatedAt)}. GBIF species key: ${escapeHtml(usageKey)}</p>
+      <div class="grid" style="margin-top:18px">
+        <div class="metric"><span>Conservation status</span><strong>${escapeHtml(status)}</strong></div>
+        <div class="metric"><span>Family</span><strong>${escapeHtml(data.identity.family)}</strong></div>
+        <div class="metric"><span>Kingdom</span><strong>${escapeHtml(data.identity.kingdom)}</strong></div>
+        <div class="metric"><span>Last spotted</span><strong>${escapeHtml(lastObserved)}</strong></div>
+      </div>
+    </header>
+
+    <section>
+      <h2>Monitoring</h2>
+      <div class="grid">
+        <div class="metric"><span>Global sightings</span><strong>${escapeHtml(data.trackerStats.globalSightings.toLocaleString())}</strong></div>
+        <div class="metric"><span>This year</span><strong>${escapeHtml(data.trackerStats.sightingsThisYear.toLocaleString())}</strong></div>
+        <div class="metric"><span>Countries observed</span><strong>${escapeHtml(data.trackerStats.countriesObserved.length)}</strong></div>
+        <div class="metric"><span>Data confidence</span><strong>${escapeHtml(data.monitoring.dataConfidence.label)} (${escapeHtml(data.monitoring.dataConfidence.score)})</strong></div>
+      </div>
+      <h3 style="margin-top:18px">Observation trend</h3>
+      <p>${escapeHtml(trendLabel)}. ${escapeHtml(data.monitoring.yearlyTrend.currentYearCount.toLocaleString())} records in ${escapeHtml(data.monitoring.yearlyTrend.currentYear)}, compared with ${escapeHtml(data.monitoring.yearlyTrend.previousYearCount.toLocaleString())} last year.</p>
+      <table><thead><tr><th>Year</th><th>Records</th></tr></thead><tbody>${yearlyRows}</tbody></table>
+      <h3 style="margin-top:18px">Seasonality</h3>
+      <p>Peak month: ${escapeHtml(data.monitoring.seasonality.peakMonth || 'No peak detected')}.</p>
+      <table><thead><tr><th>Month</th><th>Records</th></tr></thead><tbody>${monthlyRows}</tbody></table>
+      <h3 style="margin-top:18px">Evidence mix</h3>
+      <table><thead><tr><th>Record type</th><th>Count</th></tr></thead><tbody>${evidenceRows}</tbody></table>
+      <h3 style="margin-top:18px">Data quality notes</h3>
+      <ul>${issueItems}</ul>
+      <h3 style="margin-top:18px">Countries observed</h3>
+      <ul>${countryItems}</ul>
+    </section>
+
+    <section>
+      <h2>Ecological Profile</h2>
+      <div class="grid">
+        <div class="metric"><span>IUCN/GBIF status</span><strong>${escapeHtml(status)}</strong></div>
+        <div class="metric"><span>Canonical name</span><strong>${escapeHtml(data.identity.canonicalName)}</strong></div>
+        <div class="metric"><span>Ecological sections</span><strong>${escapeHtml(threatGroups.length)}</strong></div>
+      </div>
+      ${ecologicalSections}
+    </section>
+
+    <section>
+      <h2>Gallery</h2>
+      <p>${escapeHtml(galleryImages.length)} photo${galleryImages.length === 1 ? '' : 's'} from GBIF-linked records.</p>
+      <div class="gallery">${galleryMarkup}</div>
+    </section>
+  </main>
+</body>
+</html>`;
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = reportFileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadSpeciesPdfReport = async () => {
+    if (generatingPdf) return;
+    setGeneratingPdf(true);
+
+    const escapeReportHtml = (value: string | number | null | undefined) =>
+      String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    const lastObserved = data.trackerStats.lastObserved
+      ? new Date(data.trackerStats.lastObserved).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : 'N/A';
+    const status = `${data.conservation.status} - ${data.conservation.statusLabel}`;
+    const yearlyRows = data.monitoring.yearlyTrend.yearlyCounts
+      .map((item) => `<tr><td>${escapeReportHtml(item.year)}</td><td>${escapeReportHtml(item.count.toLocaleString())}</td></tr>`)
+      .join('');
+    const evidenceRows = (data.monitoring.recordTypes.length > 0 ? data.monitoring.recordTypes : [{ name: 'Unknown', count: 0 }])
+      .map((item) => `<tr><td>${escapeReportHtml(formatFacetName(item.name))}</td><td>${escapeReportHtml(item.count.toLocaleString())}</td></tr>`)
+      .join('');
+    const countryItems = data.trackerStats.countriesObserved.length
+      ? data.trackerStats.countriesObserved.map((country) => `<li>${escapeReportHtml(country)} - ${escapeReportHtml(getCountryName(country))}</li>`).join('')
+      : '<li>No country facet data available.</li>';
+    const ecologicalSections = threatGroups.length
+      ? threatGroups.map(([type, descriptions]) => `
+          <article class="note">
+            <h3>${escapeReportHtml(formatFacetName(type))}</h3>
+            ${descriptions.map((desc) => `<p>${escapeReportHtml(desc)}</p>`).join('')}
+          </article>
+        `).join('')
+      : '<p>No ecological note sections are available for this species.</p>';
+    const galleryMarkup = galleryImages.length
+      ? galleryImages.slice(0, 12).map((img, index) => `
+          <figure>
+            <img crossorigin="anonymous" src="${escapeReportHtml(img)}" alt="${escapeReportHtml(commonName)} photo ${index + 1}" />
+            <figcaption>Photo ${index + 1}</figcaption>
+          </figure>
+        `).join('')
+      : '<p>No field photos are available for this species.</p>';
+
+    const report = document.createElement('div');
+    report.style.position = 'fixed';
+    report.style.left = '-12000px';
+    report.style.top = '0';
+    report.style.width = '1040px';
+    report.style.background = '#f7fafc';
+    report.innerHTML = `
+      <main style="box-sizing:border-box;width:1040px;padding:36px 28px 56px;background:#f7fafc;color:#0f172a;font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.55;">
+        <style>
+          .pdf-section { background:#fff;border:1px solid #dbe4ef;border-radius:18px;padding:24px;margin-bottom:18px;box-shadow:0 18px 45px rgba(15,23,42,.06); }
+          .pdf-grid { display:grid;grid-template-columns:repeat(4,1fr);gap:12px; }
+          .metric { border:1px solid #e2e8f0;border-radius:14px;padding:14px;background:#f8fafc; }
+          .metric span { display:block;color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.1em; }
+          .metric strong { display:block;margin-top:6px;font-size:18px;line-height:1.2; }
+          table { width:100%;border-collapse:collapse;margin-top:10px; }
+          th,td { border-bottom:1px solid #e2e8f0;padding:8px 6px;text-align:left;font-size:14px; }
+          .note { border:1px solid #e2e8f0;border-radius:14px;padding:16px;background:#fbfdff;margin:12px 0; }
+          .gallery { display:grid;grid-template-columns:repeat(4,1fr);gap:12px; }
+          figure { margin:0;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;background:#fff; }
+          figure img { width:100%;aspect-ratio:1/1;object-fit:cover;display:block; }
+          figcaption { padding:8px 10px;color:#64748b;font-size:12px; }
+        </style>
+        <section class="pdf-section">
+          <h1 style="margin:0;font-size:34px;line-height:1.15;">${escapeReportHtml(commonName)}</h1>
+          <p style="margin:8px 0 0;color:#475569;font-style:italic;">${escapeReportHtml(data.identity.scientificName)}</p>
+          <p style="margin:14px 0 0;color:#64748b;font-size:12px;">Generated by EcoTracker. GBIF species key: ${escapeReportHtml(usageKey)}</p>
+          <div class="pdf-grid" style="margin-top:18px;">
+            <div class="metric"><span>Status</span><strong>${escapeReportHtml(status)}</strong></div>
+            <div class="metric"><span>Family</span><strong>${escapeReportHtml(data.identity.family)}</strong></div>
+            <div class="metric"><span>Global sightings</span><strong>${escapeReportHtml(data.trackerStats.globalSightings.toLocaleString())}</strong></div>
+            <div class="metric"><span>Last spotted</span><strong>${escapeReportHtml(lastObserved)}</strong></div>
+          </div>
+        </section>
+        <section class="pdf-section">
+          <h2 style="margin:0 0 14px;font-size:22px;border-bottom:1px solid #e2e8f0;padding-bottom:10px;">Monitoring</h2>
+          <div class="pdf-grid">
+            <div class="metric"><span>This year</span><strong>${escapeReportHtml(data.trackerStats.sightingsThisYear.toLocaleString())}</strong></div>
+            <div class="metric"><span>Countries</span><strong>${escapeReportHtml(data.trackerStats.countriesObserved.length)}</strong></div>
+            <div class="metric"><span>Confidence</span><strong>${escapeReportHtml(data.monitoring.dataConfidence.label)}</strong></div>
+            <div class="metric"><span>Score</span><strong>${escapeReportHtml(data.monitoring.dataConfidence.score)}</strong></div>
+          </div>
+          <h3 style="margin:18px 0 8px;font-size:16px;">Observation trend</h3>
+          <p>${escapeReportHtml(trendLabel)}. ${escapeReportHtml(data.monitoring.yearlyTrend.currentYearCount.toLocaleString())} records in ${escapeReportHtml(data.monitoring.yearlyTrend.currentYear)}.</p>
+          <table><thead><tr><th>Year</th><th>Records</th></tr></thead><tbody>${yearlyRows}</tbody></table>
+          <h3 style="margin:18px 0 8px;font-size:16px;">Evidence mix</h3>
+          <table><thead><tr><th>Record type</th><th>Count</th></tr></thead><tbody>${evidenceRows}</tbody></table>
+          <h3 style="margin:18px 0 8px;font-size:16px;">Countries observed</h3>
+          <ul>${countryItems}</ul>
+        </section>
+        <section class="pdf-section">
+          <h2 style="margin:0 0 14px;font-size:22px;border-bottom:1px solid #e2e8f0;padding-bottom:10px;">Ecological Profile</h2>
+          ${ecologicalSections}
+        </section>
+        <section class="pdf-section">
+          <h2 style="margin:0 0 14px;font-size:22px;border-bottom:1px solid #e2e8f0;padding-bottom:10px;">Gallery</h2>
+          <p>${escapeReportHtml(galleryImages.length)} photo${galleryImages.length === 1 ? '' : 's'} from GBIF-linked records. PDF preview includes up to 12 photos.</p>
+          <div class="gallery">${galleryMarkup}</div>
+        </section>
+      </main>
+    `;
+
+    try {
+      document.body.appendChild(report);
+      await Promise.all(
+        Array.from(report.querySelectorAll('img')).map((image) => {
+          if (image.complete) return Promise.resolve();
+          return new Promise<void>((resolve) => {
+            image.onload = () => resolve();
+            image.onerror = () => resolve();
+          });
+        })
+      );
+
+      const canvas = await html2canvas(report.querySelector('main') as HTMLElement, {
+        backgroundColor: '#f7fafc',
+        scale: 2,
+        useCORS: true,
+        windowWidth: 1040,
+      });
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const imageWidth = pageWidth;
+      const imageHeight = (canvas.height * imageWidth) / canvas.width;
+      const imageData = canvas.toDataURL('image/jpeg', 0.92);
+
+      let remainingHeight = imageHeight;
+      let position = 0;
+      pdf.addImage(imageData, 'JPEG', 0, position, imageWidth, imageHeight);
+      remainingHeight -= pageHeight;
+
+      while (remainingHeight > 0) {
+        position = remainingHeight - imageHeight;
+        pdf.addPage();
+        pdf.addImage(imageData, 'JPEG', 0, position, imageWidth, imageHeight);
+        remainingHeight -= pageHeight;
+      }
+
+      pdf.save(reportFileName.replace(/\.html$/, '.pdf'));
+    } catch (pdfError) {
+      console.error('Failed to generate species PDF report', pdfError);
+      window.alert('PDF export failed. The HTML report is still available.');
+    } finally {
+      report.remove();
+      setGeneratingPdf(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -299,6 +701,28 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={downloadSpeciesReport}
+                className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-500/5 hover:bg-cyan-400/15 text-cyan-300 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.22em] transition-all"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v12m0 0l4-4m-4 4l-4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
+                </svg>
+                Download report
+              </button>
+              <button
+                type="button"
+                onClick={downloadSpeciesPdfReport}
+                disabled={generatingPdf}
+                className="inline-flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-500/5 hover:bg-violet-400/15 disabled:opacity-60 disabled:cursor-wait text-violet-200 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.22em] transition-all"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M7 3h7l5 5v13H7a2 2 0 01-2-2V5a2 2 0 012-2z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M14 3v5h5M8 15h8M8 18h5" />
+                </svg>
+                {generatingPdf ? 'Building PDF...' : 'PDF export'}
+              </button>
               {isSaved ? (
                 <button
                   type="button"
@@ -436,7 +860,7 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
         {[
           { id: 'monitoring', label: 'Monitoring' },
           { id: 'ecology', label: 'Ecological Profile' },
-          { id: 'gallery', label: `Gallery (${Math.max(data.images.length - 1, 0)})` },
+          { id: 'gallery', label: `Gallery (${galleryImages.length})` },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -651,17 +1075,6 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
 
             {threatGroups.length > 0 ? (
               <div className="space-y-4">
-                <AiOverview
-                  label="Summarize ecological profile"
-                  context="ecological profile"
-                  commonName={commonName}
-                  scientificName={data.identity.scientificName}
-                  sections={threatGroups.map(([type, descriptions]) => ({
-                    label: type.replace(/_/g, ' '),
-                    text: descriptions.join(' '),
-                  }))}
-                />
-
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {threatGroups.map(([type, descriptions]) => {
                     const colorClass = threatTypeColors[type] || 'text-slate-300 bg-white/5 border-white/10';
@@ -695,12 +1108,12 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
             <div className="flex items-center justify-between gap-3 mb-4">
               <div>
                 <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500 font-semibold">Field Evidence Gallery</p>
-                <h3 className="text-lg font-semibold text-white mt-1">{Math.max(data.images.length - 1, 0)} photos from GBIF-linked records</h3>
+                <h3 className="text-lg font-semibold text-white mt-1">{galleryImages.length} photos from GBIF-linked records</h3>
               </div>
             </div>
-            {data.images.length > 1 ? (
+            {galleryImages.length > 0 ? (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-                {data.images.slice(1, 16).map((img, index) => (
+                {galleryImages.map((img, index) => (
                   <button
                     key={index}
                     type="button"
