@@ -621,20 +621,78 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const imageWidth = pageWidth;
-      const imageHeight = (canvas.height * imageWidth) / canvas.width;
-      const imageData = canvas.toDataURL('image/jpeg', 0.92);
+      const pageCanvas = document.createElement('canvas');
+      const pageContext = pageCanvas.getContext('2d');
+      const sourceContext = canvas.getContext('2d');
+      if (!pageContext || !sourceContext) {
+        throw new Error('Unable to prepare PDF page canvas.');
+      }
 
-      let remainingHeight = imageHeight;
-      let position = 0;
-      pdf.addImage(imageData, 'JPEG', 0, position, imageWidth, imageHeight);
-      remainingHeight -= pageHeight;
+      const pageHeightPx = Math.floor((pageHeight * canvas.width) / pageWidth);
+      pageCanvas.width = canvas.width;
+      pageCanvas.height = pageHeightPx;
 
-      while (remainingHeight > 0) {
-        position = remainingHeight - imageHeight;
-        pdf.addPage();
-        pdf.addImage(imageData, 'JPEG', 0, position, imageWidth, imageHeight);
-        remainingHeight -= pageHeight;
+      const findNaturalPageBreak = (startY: number) => {
+        const idealBreak = startY + pageHeightPx;
+        if (idealBreak >= canvas.height) return canvas.height;
+
+        const searchRadius = Math.min(Math.floor(pageHeightPx * 0.16), 260);
+        const minBreak = Math.max(startY + Math.floor(pageHeightPx * 0.62), idealBreak - searchRadius);
+        const maxBreak = Math.min(canvas.height - 1, idealBreak + searchRadius);
+        const sampleStepX = Math.max(8, Math.floor(canvas.width / 140));
+        let bestY = idealBreak;
+        let bestScore = Number.POSITIVE_INFINITY;
+
+        for (let y = minBreak; y <= maxBreak; y += 3) {
+          const row = sourceContext.getImageData(0, y, canvas.width, 1).data;
+          let inkScore = 0;
+          for (let x = 0; x < canvas.width; x += sampleStepX) {
+            const index = x * 4;
+            const r = row[index];
+            const g = row[index + 1];
+            const b = row[index + 2];
+            const alpha = row[index + 3] / 255;
+            const darkness = (255 - (r + g + b) / 3) * alpha;
+            if (darkness > 22) inkScore += darkness;
+          }
+
+          const distancePenalty = Math.abs(y - idealBreak) * 0.4;
+          const score = inkScore + distancePenalty;
+          if (score < bestScore) {
+            bestScore = score;
+            bestY = y;
+          }
+        }
+
+        return bestY <= startY ? Math.min(startY + pageHeightPx, canvas.height) : bestY;
+      };
+
+      let sourceY = 0;
+      let pageIndex = 0;
+      while (sourceY < canvas.height) {
+        const nextBreak = findNaturalPageBreak(sourceY);
+        const sliceHeight = Math.min(nextBreak - sourceY, canvas.height - sourceY);
+        pageContext.clearRect(0, 0, pageCanvas.width, pageCanvas.height);
+        pageContext.fillStyle = '#f7fafc';
+        pageContext.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+        pageContext.drawImage(
+          canvas,
+          0,
+          sourceY,
+          canvas.width,
+          sliceHeight,
+          0,
+          0,
+          pageCanvas.width,
+          sliceHeight
+        );
+
+        if (pageIndex > 0) {
+          pdf.addPage();
+        }
+        pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pageWidth, pageHeight);
+        sourceY = nextBreak;
+        pageIndex += 1;
       }
 
       pdf.save(reportFileName.replace(/\.html$/, '.pdf'));

@@ -33,6 +33,11 @@ const typeMeta: Record<AppNotification['type'], { label: string; accent: string;
     accent: 'text-violet-200 border-violet-400/25 bg-violet-400/10',
     badge: 'bg-violet-400/12 text-violet-200 border-violet-400/20',
   },
+  email_test: {
+    label: 'Email test',
+    accent: 'text-cyan-200 border-cyan-400/25 bg-cyan-400/10',
+    badge: 'bg-cyan-400/12 text-cyan-200 border-cyan-400/20',
+  },
 };
 
 const statusLabels: Record<string, string> = {

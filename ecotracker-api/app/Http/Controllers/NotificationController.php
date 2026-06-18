@@ -2,11 +2,17 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AppNotification;
+use App\Services\AppNotificationEmailService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class NotificationController extends Controller
 {
+    public function __construct(private AppNotificationEmailService $emailService)
+    {
+    }
+
     /**
      * Get all notifications for the authenticated user.
      */
@@ -27,6 +33,18 @@ class NotificationController extends Controller
             'notifications' => $notifications,
             'unread_count'  => $unreadCount,
         ]);
+    }
+
+    /**
+     * Get a single notification for the authenticated user.
+     */
+    public function show(Request $request, int $id): JsonResponse
+    {
+        $notification = $request->user()
+            ->appNotifications()
+            ->findOrFail($id);
+
+        return response()->json($notification);
     }
 
     /**
@@ -81,5 +99,29 @@ class NotificationController extends Controller
             ->count();
 
         return response()->json(['unread_count' => $count]);
+    }
+
+    /**
+     * Send a test notification email to the authenticated user.
+     */
+    public function sendTestEmail(Request $request): JsonResponse
+    {
+        $notification = AppNotification::withoutEvents(fn () => $request->user()->appNotifications()->create([
+            'type' => 'email_test',
+            'title' => 'EcoTracker Email Test',
+            'message' => 'Your EcoTracker email notification setup is working.',
+            'data' => ['from' => 'email_test'],
+            'is_read' => false,
+        ]));
+
+        $sent = $this->emailService->send($notification, force: true);
+
+        return response()->json([
+            'sent' => $sent,
+            'notification' => $notification,
+            'message' => $sent
+                ? 'Test email sent.'
+                : 'Test email was not sent. Check EMAIL_NOTIFICATIONS_ENABLED and mail settings.',
+        ], $sent ? 200 : 422);
     }
 }

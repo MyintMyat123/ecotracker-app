@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\AppNotificationEmailService;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -24,6 +25,13 @@ class AppNotification extends Model
             'data' => 'array',
             'is_read' => 'boolean',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        static::created(function (AppNotification $notification) {
+            app(AppNotificationEmailService::class)->send($notification);
+        });
     }
 
     public function user(): BelongsTo

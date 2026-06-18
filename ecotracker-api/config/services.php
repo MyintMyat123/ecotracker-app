@@ -35,4 +35,10 @@ return [
         ],
     ],
 
+    'notifications' => [
+        'email_enabled' => env('EMAIL_NOTIFICATIONS_ENABLED', true),
+        'email_types' => env('EMAIL_NOTIFICATION_TYPES'),
+        'frontend_url' => env('FRONTEND_URL', env('APP_URL', 'http://localhost')),
+    ],
+
 ];

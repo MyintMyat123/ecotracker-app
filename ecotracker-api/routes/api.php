@@ -41,6 +41,8 @@ Route::middleware('auth:sanctum')->prefix('watchlist')->group(function () {
 Route::middleware('auth:sanctum')->prefix('notifications')->group(function () {
     Route::get('/',                 [NotificationController::class, 'index']);
     Route::get('/unread-count',     [NotificationController::class, 'unreadCount']);
+    Route::post('/test-email',      [NotificationController::class, 'sendTestEmail']);
+    Route::get('/{id}',             [NotificationController::class, 'show']);
     Route::patch('/{id}/read',      [NotificationController::class, 'markRead']);
     Route::post('/mark-all-read',   [NotificationController::class, 'markAllRead']);
     Route::delete('/{id}',          [NotificationController::class, 'destroy']);

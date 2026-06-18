@@ -38,6 +38,51 @@ function App() {
   };
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#\/?/, ''));
+    const notificationId = Number(params.get('notification') || hashParams.get('notification'));
+    const speciesKey = Number(params.get('species') || hashParams.get('species'));
+    const speciesName = params.get('name') || hashParams.get('name') || 'Tracked species';
+    const deepLinkedPage = params.get('page') || hashParams.get('page');
+
+    if (Number.isFinite(notificationId) && notificationId > 0) {
+      if (!token) {
+        setAuthModalMode('login');
+        setAuthModalOpen(true);
+        setPage('notifications');
+        showToast('Sign in to view this notification.', 'error');
+        return;
+      }
+
+      apiRequest<AppNotification>(`/notifications/${notificationId}`, { token })
+        .then((notification) => {
+          setSelectedNotification(notification);
+          setTrackerTarget(null);
+          setPage('notification');
+          window.history.replaceState({}, document.title, window.location.pathname);
+        })
+        .catch((err) => {
+          showToast(err instanceof Error ? err.message : 'Unable to open notification.', 'error');
+          setPage('notifications');
+        });
+      return;
+    }
+
+    if (Number.isFinite(speciesKey) && speciesKey > 0) {
+      setTrackerTarget({ usageKey: speciesKey, commonName: speciesName });
+      setSelectedNotification(null);
+      setPage('tracker');
+      window.history.replaceState({}, document.title, window.location.pathname);
+      return;
+    }
+
+    if (deepLinkedPage === 'notifications') {
+      setPage('notifications');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, [token]);
+
+  useEffect(() => {
     if (!token) return;
     apiRequest<{ user: AuthUser }>('/auth/me', { token })
       .then((data) => setUser(data.user))

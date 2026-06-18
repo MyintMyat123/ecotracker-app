@@ -12,6 +12,7 @@ const typeLabels: Record<AppNotification['type'], string> = {
   status_change: 'Status change',
   new_sighting: 'New sighting',
   system: 'Admin',
+  email_test: 'Email test',
 };
 
 const typeClass: Record<AppNotification['type'], string> = {
@@ -20,6 +21,7 @@ const typeClass: Record<AppNotification['type'], string> = {
   status_change: 'border-amber-400/20 bg-amber-400/10 text-amber-200',
   new_sighting: 'border-cyan-400/20 bg-cyan-400/10 text-cyan-200',
   system: 'border-violet-400/20 bg-violet-400/10 text-violet-200',
+  email_test: 'border-cyan-400/20 bg-cyan-400/10 text-cyan-200',
 };
 
 const formatDate = (value: string) =>
