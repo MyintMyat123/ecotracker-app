@@ -12,6 +12,8 @@ interface CountrySpecies {
   country: string;
   family?: string | null;
   kingdom?: string | null;
+  last_observed_at?: string | null;
+  basis_of_record?: string | null;
 }
 
 interface CountryExplorerProps {
@@ -45,6 +47,11 @@ const statusWeight = (code: string) => {
   const index = STATUS_ORDER.indexOf(code || 'NE');
   return index === -1 ? STATUS_ORDER.length : index;
 };
+
+const formatFacetName = (value: string) => value
+  .replace(/_/g, ' ')
+  .toLowerCase()
+  .replace(/\b\w/g, (char) => char.toUpperCase());
 
 const CountryExplorer: React.FC<CountryExplorerProps> = ({
   isAuthenticated,
@@ -97,6 +104,41 @@ const CountryExplorer: React.FC<CountryExplorerProps> = ({
 
   const kingdomOptions = useMemo(() => {
     return Array.from(new Set(results.map((species) => species.kingdom).filter(Boolean))) as string[];
+  }, [results]);
+
+  const countryDashboard = useMemo(() => {
+    const threatened = results.filter((species) => ['CR', 'EN', 'VU'].includes(species.conservation_status));
+    const familyCounts = threatened.reduce<Record<string, number>>((acc, species) => {
+      const family = species.family || 'Unknown family';
+      acc[family] = (acc[family] || 0) + 1;
+      return acc;
+    }, {});
+    const kingdomCounts = threatened.reduce<Record<string, number>>((acc, species) => {
+      const kingdom = species.kingdom || 'Unknown';
+      acc[kingdom] = (acc[kingdom] || 0) + 1;
+      return acc;
+    }, {});
+
+    return {
+      totalThreatened: threatened.length,
+      statusCounts: {
+        CR: results.filter((species) => species.conservation_status === 'CR').length,
+        EN: results.filter((species) => species.conservation_status === 'EN').length,
+        VU: results.filter((species) => species.conservation_status === 'VU').length,
+      },
+      topGroups: Object.entries(familyCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5),
+      kingdomGroups: Object.entries(kingdomCounts)
+        .sort((a, b) => b[1] - a[1]),
+      recentSightings: results
+        .filter((species) => species.last_observed_at)
+        .sort((a, b) => new Date(b.last_observed_at || '').getTime() - new Date(a.last_observed_at || '').getTime())
+        .slice(0, 5),
+      poorDataCoverage: results
+        .filter((species) => !species.common_name || !species.family || !species.kingdom || !species.last_observed_at)
+        .slice(0, 5),
+    };
   }, [results]);
 
   const filteredResults = useMemo(() => {
@@ -201,6 +243,110 @@ const CountryExplorer: React.FC<CountryExplorerProps> = ({
       {/* Results */}
       {!loading && results.length > 0 && (
         <>
+          <section className="rounded-3xl border border-white/8 bg-slate-950/55 p-5 shadow-2xl shadow-black/20">
+            <div className="mb-5 flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.24em] text-emerald-300 font-black">Country conservation dashboard</p>
+                <h3 className="mt-1 text-2xl font-black text-white">{searched} threat profile</h3>
+              </div>
+              <p className="max-w-2xl text-xs leading-5 text-slate-400">
+                Summary built from the threatened species returned by GBIF for this country. Use it to spot urgent statuses, dominant taxonomic groups, recent records, and records needing better coverage.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500 font-black">Total threatened</p>
+                <p className="mt-3 text-3xl font-black text-white">{countryDashboard.totalThreatened}</p>
+              </div>
+              {(['CR', 'EN', 'VU'] as const).map((code) => {
+                const badge = IUCN_BADGE[code];
+                return (
+                  <div key={code} className={`rounded-2xl border p-4 ${badge.bg} ${badge.border}`}>
+                    <p className={`text-[10px] uppercase tracking-[0.18em] font-black ${badge.text}`}>{badge.label}</p>
+                    <p className={`mt-3 text-3xl font-black ${badge.text}`}>{countryDashboard.statusCounts[code]}</p>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-5 grid gap-4 lg:grid-cols-2">
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-black">Top endangered groups</p>
+                <div className="mt-3 space-y-2">
+                  {countryDashboard.topGroups.length > 0 ? countryDashboard.topGroups.map(([family, count]) => (
+                    <div key={family} className="flex items-center justify-between gap-3 rounded-xl bg-slate-950/45 px-3 py-2">
+                      <span className="truncate text-xs font-semibold text-slate-200">{family}</span>
+                      <span className="rounded-full bg-emerald-400/10 px-2 py-0.5 text-[10px] font-black text-emerald-200">{count}</span>
+                    </div>
+                  )) : (
+                    <p className="text-sm text-slate-500">No family group data returned.</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-black">Kingdom distribution</p>
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {countryDashboard.kingdomGroups.length > 0 ? countryDashboard.kingdomGroups.map(([kingdom, count]) => (
+                    <div key={kingdom} className="rounded-xl bg-slate-950/45 px-3 py-2">
+                      <span className="block text-[10px] uppercase tracking-[0.16em] text-slate-500">{kingdom}</span>
+                      <strong className="text-slate-100">{count}</strong>
+                    </div>
+                  )) : (
+                    <p className="text-sm text-slate-500">No kingdom data returned.</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-black">Species with recent sightings</p>
+                <div className="mt-3 space-y-2">
+                  {countryDashboard.recentSightings.length > 0 ? countryDashboard.recentSightings.map((species) => (
+                    <button
+                      key={species.id}
+                      type="button"
+                      onClick={() => onViewTracker({ usageKey: species.id, commonName: species.common_name || species.scientific_name })}
+                      className="flex w-full items-center justify-between gap-3 rounded-xl bg-slate-950/45 px-3 py-2 text-left hover:bg-white/[0.06]"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-xs font-bold text-slate-100">{species.common_name || species.scientific_name}</span>
+                        <span className="block text-[10px] text-slate-500">{species.basis_of_record ? formatFacetName(species.basis_of_record) : 'GBIF occurrence'}</span>
+                      </span>
+                      <span className="shrink-0 text-[10px] font-semibold text-cyan-200">
+                        {new Date(species.last_observed_at || '').toLocaleDateString()}
+                      </span>
+                    </button>
+                  )) : (
+                    <p className="text-sm text-slate-500">No dated records returned in this sample.</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-black">Species with poor data coverage</p>
+                <div className="mt-3 space-y-2">
+                  {countryDashboard.poorDataCoverage.length > 0 ? countryDashboard.poorDataCoverage.map((species) => {
+                    const missing = [
+                      !species.common_name ? 'common name' : null,
+                      !species.family ? 'family' : null,
+                      !species.kingdom ? 'kingdom' : null,
+                      !species.last_observed_at ? 'recent date' : null,
+                    ].filter(Boolean).join(', ');
+                    return (
+                      <div key={species.id} className="rounded-xl bg-slate-950/45 px-3 py-2">
+                        <p className="truncate text-xs font-bold text-slate-100">{species.common_name || species.scientific_name}</p>
+                        <p className="mt-0.5 text-[10px] text-slate-500">Missing {missing}</p>
+                      </div>
+                    );
+                  }) : (
+                    <p className="text-sm text-slate-500">Returned species include basic coverage fields.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+
           {/* Summary bar */}
           <div className="flex flex-wrap items-center justify-between gap-4">
             <p className="text-slate-400 text-sm">
@@ -300,6 +446,12 @@ const CountryExplorer: React.FC<CountryExplorerProps> = ({
                     )}
                     <div><span className="text-slate-500 block">Country</span><span className="text-slate-300">{species.country}</span></div>
                     <div><span className="text-slate-500 block">Status</span><span className={badge.text}>{badge.label}</span></div>
+                    {species.last_observed_at && (
+                      <div className="col-span-2">
+                        <span className="text-slate-500 block">Last observed</span>
+                        <span className="text-slate-300">{new Date(species.last_observed_at).toLocaleDateString()}</span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center justify-between pt-3 border-t border-white/8">

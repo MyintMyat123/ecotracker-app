@@ -10,92 +10,110 @@ use Illuminate\Support\Facades\Log;
 class AiController extends Controller
 {
     /**
-     * Generate AI bullet-point overviews from one text block or multiple labelled sections.
+     * Build a structured ecological field brief from one GBIF text section.
      */
     public function overview(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'text' => 'required_without:sections|string|min:20|max:8000',
-            'context' => 'sometimes|string|max:100',
+            'text' => 'required|string|min:20|max:9000',
+            'context' => 'sometimes|string|max:120',
             'type' => 'sometimes|string|max:100',
             'commonName' => 'sometimes|string|max:160',
             'scientificName' => 'sometimes|string|max:220',
-            'sections' => 'required_without:text|array|min:1|max:12',
-            'sections.*.label' => 'required_with:sections|string|max:120',
-            'sections.*.text' => 'required_with:sections|string|min:20|max:8000',
+            'conservationStatus' => 'sometimes|string|max:80',
         ]);
 
-        $sections = $this->normalizeSections($validated);
-        $context = $validated['context'] ?? $validated['type'] ?? 'general';
+        $section = [
+            'label' => trim((string) ($validated['context'] ?? $validated['type'] ?? 'Ecological profile')),
+            'text' => $this->prepareSourceText((string) $validated['text']),
+        ];
+
+        if (strlen($section['text']) < 20) {
+            return $this->aiError('The selected section does not contain enough text to summarize.', 422);
+        }
+
+        $apiKey = trim((string) env('GEMINI_API_KEY', ''));
+        if ($apiKey === '') {
+            return $this->aiError('GEMINI_API_KEY is missing.', 503);
+        }
 
         try {
-            $apiKey = env('GEMINI_API_KEY');
-
-            if (!$apiKey) {
-                return $this->fallbackSummary($sections);
-            }
-
             $payload = [
                 'contents' => [[
                     'role' => 'user',
                     'parts' => [[
-                        'text' => $this->buildGeminiPrompt(
-                            $sections[0],
-                            $context,
+                        'text' => $this->buildPrompt(
+                            $section,
                             $validated['commonName'] ?? null,
                             $validated['scientificName'] ?? null,
+                            $validated['conservationStatus'] ?? null,
                         ),
                     ]],
                 ]],
                 'generationConfig' => [
-                    'temperature' => 0.45,
-                    'maxOutputTokens' => 900,
+                    'temperature' => 0.15,
+                    'maxOutputTokens' => (int) env('GEMINI_MAX_OUTPUT_TOKENS', 1024),
+                    'responseMimeType' => 'application/json',
+                    'responseSchema' => [
+                        'type' => 'ARRAY',
+                        'items' => [
+                            'type' => 'STRING',
+                        ],
+                    ],
+                    'thinkingConfig' => [
+                        'thinkingBudget' => 0,
+                    ],
                 ],
             ];
 
-            $response = $this->postGeminiOverview($apiKey, $payload);
+            $failureReason = null;
+            $response = $this->postGemini($apiKey, $payload, $failureReason);
             if (!$response) {
-                return $this->fallbackSummary($sections);
+                return $this->aiError($failureReason ?: 'Gemini request failed.', 502);
             }
 
-            $content = $response->json('candidates.0.content.parts.0.text', '');
-            $markdown = $this->cleanMarkdown($content);
-            if ($markdown === '') {
-                return $this->fallbackSummary($sections);
+            $content = (string) $response->json('candidates.0.content.parts.0.text', '');
+            $finishReason = $response->json('candidates.0.finishReason');
+            $bullets = $this->decodeBulletSummary($content);
+            if (empty($bullets)) {
+                Log::warning('Ecological AI brief parse failed', [
+                    'model' => env('GEMINI_MODEL', 'gemini-3.5-flash'),
+                    'finish_reason' => $finishReason,
+                    'content_excerpt' => mb_substr($this->sanitizeLogMessage($content), 0, 600),
+                ]);
+                return $this->aiError('Gemini responded, but the bullet summary could not be parsed.', 502, [
+                    'model' => env('GEMINI_MODEL', 'gemini-3.5-flash'),
+                    'finish_reason' => $finishReason,
+                    'raw_response' => $content,
+                ]);
             }
-
-            $summary = [
-                'label' => $sections[0]['label'],
-                'markdown' => $markdown,
-                'bullets' => [],
-            ];
 
             return response()->json([
-                'markdown' => $markdown,
-                'bullets' => [],
-                'summaries' => [$summary],
                 'source' => 'ai',
+                'bullets' => $bullets,
             ]);
         } catch (\Throwable $e) {
-            Log::error('Gemini overview exception: ' . $e->getMessage());
-            return $this->fallbackSummary($sections);
+            Log::error('Ecological AI brief exception: ' . $this->sanitizeLogMessage($e->getMessage()));
+            return $this->aiError('Unexpected AI summary error.', 500);
         }
     }
 
-    private function postGeminiOverview(string $apiKey, array $payload): ?\Illuminate\Http\Client\Response
+    private function postGemini(string $apiKey, array $payload, ?string &$failureReason = null): ?\Illuminate\Http\Client\Response
     {
-        $configuredModel = trim((string) env('GEMINI_MODEL', ''));
+        $configuredModel = trim((string) env('GEMINI_MODEL', 'gemini-3.5-flash'));
+        $fallbackModels = collect(explode(',', (string) env('GEMINI_FALLBACK_MODELS', '')))
+            ->map(fn ($model) => trim($model))
+            ->filter()
+            ->all();
         $models = array_values(array_unique(array_filter([
             $configuredModel,
-            'gemini-2.0-flash',
-            'gemini-1.5-flash-latest',
-            'gemini-1.5-pro-latest',
+            ...$fallbackModels,
         ])));
 
         foreach ($models as $model) {
             try {
                 $response = Http::connectTimeout(5)
-                    ->timeout(15)
+                    ->timeout((int) env('GEMINI_TIMEOUT', 45))
                     ->post(
                         "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}",
                         $payload,
@@ -105,15 +123,17 @@ class AiController extends Controller
                     return $response;
                 }
 
-                Log::warning('Gemini overview API call failed', [
+                $failureReason = "Gemini model {$model} failed with HTTP {$response->status()}.";
+                Log::warning('Ecological AI brief API call failed', [
                     'model' => $model,
                     'status' => $response->status(),
-                    'body' => $response->body(),
+                    'body' => $this->sanitizeLogMessage($response->body()),
                 ]);
             } catch (\Throwable $e) {
-                Log::warning('Gemini overview request exception', [
+                $failureReason = "Gemini model {$model} request failed: " . $this->sanitizeLogMessage($e->getMessage());
+                Log::warning('Ecological AI brief request exception', [
                     'model' => $model,
-                    'error' => $e->getMessage(),
+                    'error' => $this->sanitizeLogMessage($e->getMessage()),
                 ]);
             }
         }
@@ -121,61 +141,33 @@ class AiController extends Controller
         return null;
     }
 
-    private function normalizeSections(array $validated): array
+    private function buildPrompt(array $section, ?string $commonName, ?string $scientificName, ?string $conservationStatus): string
     {
-        if (!empty($validated['sections'])) {
-            return collect($validated['sections'])
-                ->map(fn ($section) => [
-                    'label' => trim((string) $section['label']),
-                    'text' => trim(strip_tags((string) $section['text'])),
-                ])
-                ->filter(fn ($section) => strlen($section['text']) >= 20)
-                ->values()
-                ->all();
-        }
-
-        return [[
-            'label' => $validated['context'] ?? $validated['type'] ?? 'Summary',
-            'text' => trim(strip_tags((string) $validated['text'])),
-        ]];
-    }
-
-    private function buildGeminiPrompt(array $section, string $context, ?string $commonName, ?string $scientificName): string
-    {
-        $nameLine = trim((string) $commonName) !== '' || trim((string) $scientificName) !== ''
-            ? "Known species context: Common name = " . (trim((string) $commonName) ?: 'Unknown') . "; Scientific name = " . (trim((string) $scientificName) ?: 'Unknown') . ".\n"
-            : '';
-        $label = $section['label'] ?? $context;
-        $text = $this->prepareSourceText((string) ($section['text'] ?? ''));
+        $label = $section['label'];
+        $text = $section['text'];
+        $common = trim((string) $commonName) ?: 'Unknown common name';
+        $scientific = trim((string) $scientificName) ?: 'Unknown scientific name';
+        $status = trim((string) $conservationStatus) ?: 'Unknown conservation status';
 
         return <<<PROMPT
-You are an advanced biological data parsing agent. Your sole task is to process disorganized, raw species data dumps and synthesize them into a clean, professional Markdown summary for one ecological information section.
+You are a conservation biology analyst for EcoTracker.
 
-CRITICAL BEHAVIORAL LAWS:
-1. NO CONVERSATIONAL FILLER: Never start with intro sentences or conversational fluff. Output the summary immediately.
-2. FILTER DEBRIS: Ignore duplicate lines, citations, and empty headers.
-3. LOWER CASE CONSISTENCY: Avoid shouting in ALL CAPS even if the source data does. Use proper title casing for animal classifications.
+Task: Convert one raw GBIF ecological description section into a concise bullet-point summary for monitoring endangered species.
 
-OUTPUT STYLE:
-- Return Markdown only.
-- Do not wrap the answer in JSON.
-- Do not use code fences.
-- Start with a short Markdown heading for the section, not a fixed species blueprint.
-- Write a concise synthesis in your own words. Keep it under 140 words.
-- Use 2 to 4 bullets only when they make the section easier to scan.
-- Adapt the structure to the actual section content. Do not force categories that are missing from the text.
-- Highlight conservation relevance, uncertainty, location/range information, habitat, behavior, or data gaps only when they are actually supported by the supplied text.
-- Keep the result professional and compact.
-- Do not echo the raw source text.
-- Do not include phrases like "For this section", "Raw species data", "this is the ai summary", "Discussion:", "Comments:", or "Synonymic list".
-- Do not copy long sentences verbatim from the source.
+Rules:
+- Use only the supplied text and species context.
+- Do not invent threats, locations, traits, dates, or conservation claims.
+- Ignore duplicate lines, citations, source names, taxonomic debris, and empty headings.
+- Synthesize in your own words instead of copying the source.
+- If the text is mostly taxonomy, synonymy, or specimen metadata, explain its monitoring value honestly.
+- Keep the result compact and useful for researchers.
 
-Use the species context only when it helps clarify the subject.
-Do not invent facts beyond the supplied text and species context.
+Return only a JSON array of strings.
+The first character of your response must be [ and the last character must be ].
+Do not write an introduction such as "Here is the JSON requested".
 
-{$nameLine}Section label: {$label}
-
-Raw species data:
+Species: {$common} ({$scientific}); status: {$status}; section: {$label}
+Text:
 {$text}
 PROMPT;
     }
@@ -203,110 +195,145 @@ PROMPT;
             $clean[] = $line;
         }
 
-        return mb_substr(implode("\n", $clean), 0, 6000);
+        return mb_substr(implode("\n", $clean), 0, 6500);
     }
 
-    private function cleanMarkdown(string $content): string
+    private function decodeBulletSummary(string $content): array
     {
-        $content = trim($content);
+        $content = $this->normalizeJsonCandidate($content);
+        $decoded = json_decode((string) $content, true);
 
-        for ($i = 0; $i < 3; $i++) {
-            $content = trim($content);
-            $content = preg_replace('/^```(?:json|markdown|md)?\s*/', '', $content);
-            $content = preg_replace('/\s*```$/', '', $content);
-
-            $decoded = json_decode($content, true);
-            if (is_array($decoded) && isset($decoded['markdown'])) {
-                $content = (string) $decoded['markdown'];
-                continue;
-            }
-
-            if (is_string($decoded)) {
-                $content = $decoded;
-                continue;
-            }
-
-            if (preg_match('/"markdown"\s*:\s*"((?:[^"\\\\]|\\\\.)*)"/s', $content, $matches)) {
-                $unescaped = json_decode('"' . $matches[1] . '"');
-                if (is_string($unescaped)) {
-                    $content = $unescaped;
-                    continue;
-                }
-            }
-
-            if (preg_match('/^\s*\{\s*"markdown"\s*:\s*(.*)\s*\}?\s*$/is', $content, $matches)) {
-                $content = trim($matches[1]);
-                $content = preg_replace('/^"/', '', $content);
-                $content = preg_replace('/",?\s*\}?$/', '', $content);
-                $content = stripcslashes((string) $content);
-                continue;
-            }
-
-            break;
+        if (is_string($decoded)) {
+            return $this->decodeBulletSummary($decoded);
         }
 
-        $content = preg_replace('/^\s*\{\s*"markdown"\s*:\s*"?/i', '', $content);
-        $content = preg_replace('/"?,?\s*\}\s*$/', '', $content);
-        $content = preg_replace('/^\s*(?:this is the ai summary\s*:|for this section\s*:)\s*/i', '', $content);
-        $content = preg_replace('/\n\s*For this section\s*:.*$/is', '', $content);
-        $content = preg_replace('/\n\s*Raw species data\s*:.*$/is', '', $content);
-        $content = preg_replace('/^\s*(?:discussion|comments|synonymic list)\s*:?.*$/im', '', $content);
-        $content = preg_replace("/\n{3,}/", "\n\n", $content);
+        if (is_array($decoded)) {
+            if (array_is_list($decoded)) {
+                return $this->cleanBullets($decoded);
+            }
 
-        return trim((string) $content);
+            foreach (['bullets', 'summary', 'key_points', 'points'] as $key) {
+                if (isset($decoded[$key]) && is_array($decoded[$key])) {
+                    return $this->cleanBullets($decoded[$key]);
+                }
+            }
+        }
+
+        if (preg_match('/\[[\s\S]*\]/', (string) $content, $matches)) {
+            $decoded = json_decode($this->repairJson($matches[0]), true);
+            if (is_array($decoded)) {
+                return $this->cleanBullets($decoded);
+            }
+        }
+
+        return $this->parseBulletLines($content);
     }
 
-    private function fallbackSummary(array $sections): JsonResponse
+    private function normalizeJsonCandidate(string $content): string
     {
-        $summaries = $this->fallbackSummaries($sections);
+        $content = trim($content);
+        $content = preg_replace('/^```(?:json)?\s*/i', '', $content);
+        $content = preg_replace('/\s*```$/', '', (string) $content);
+        $content = html_entity_decode((string) $content);
+        $content = trim((string) $content);
 
-        return response()->json([
-            'bullets' => $summaries[0]['bullets'] ?? [],
-            'markdown' => $summaries[0]['markdown'] ?? '',
-            'summaries' => $summaries,
-            'source' => 'fallback',
-        ]);
+        if (
+            strlen($content) >= 2 &&
+            (($content[0] === '"' && substr($content, -1) === '"') || ($content[0] === "'" && substr($content, -1) === "'"))
+        ) {
+            $decoded = json_decode($content, true);
+            if (is_string($decoded)) {
+                return $this->normalizeJsonCandidate($decoded);
+            }
+
+            $content = trim(stripcslashes(substr($content, 1, -1)));
+        }
+
+        if (str_contains($content, '\\"') || str_contains($content, '\\n')) {
+            $unescaped = stripcslashes($content);
+            if (str_contains($unescaped, '[') && str_contains($unescaped, ']')) {
+                return trim($unescaped);
+            }
+        }
+
+        return $content;
     }
 
-    private function fallbackSummaries(array $sections): array
+    private function repairJson(string $json): string
     {
-        return collect($sections)
-            ->map(fn ($section) => [
-                'label' => $section['label'],
-                'markdown' => $this->fallbackMarkdown($section),
-                'bullets' => $this->sentenceBullets($section['text']),
-            ])
+        $json = trim($json);
+        $json = preg_replace('/,\s*([}\]])/', '$1', $json) ?? $json;
+        $json = str_replace(["\r\n", "\r"], "\n", $json);
+
+        return $json;
+    }
+
+    private function cleanBullets(array $bullets): array
+    {
+        return collect($bullets)
+            ->map(fn ($bullet) => $this->cleanBulletValue($bullet))
+            ->filter(fn ($bullet) => $bullet !== '' && !str_starts_with(trim($bullet), '{'))
+            ->take(5)
             ->values()
             ->all();
     }
 
-    private function fallbackMarkdown(array $section): string
+    private function cleanBulletValue(mixed $bullet): string
     {
-        $bullets = $this->sentenceBullets((string) ($section['text'] ?? ''));
-        $summary = $bullets[0] ?? 'No reliable summary could be generated from the available text.';
-        $extraBullets = array_slice($bullets, 1, 3);
+        if (is_array($bullet)) {
+            foreach (['bullet', 'text', 'summary', 'content', 'point'] as $key) {
+                if (isset($bullet[$key])) {
+                    return $this->cleanScalar($bullet[$key]);
+                }
+            }
 
-        $markdown = "### {$section['label']}\n{$summary}";
-
-        foreach ($extraBullets as $bullet) {
-            $markdown .= "\n* {$bullet}";
+            return $this->cleanScalar(implode(' ', array_map(
+                fn ($value) => is_scalar($value) ? (string) $value : '',
+                $bullet,
+            )));
         }
 
-        return $markdown;
+        return $this->cleanScalar($bullet);
     }
 
-    private function sentenceBullets(string $text): array
+    private function parseBulletLines(string $content): array
     {
-        $sentences = preg_split('/(?<=[.!?])\s+/', strip_tags($text), -1, PREG_SPLIT_NO_EMPTY);
+        $lines = preg_split('/\r?\n+/', trim($content), -1, PREG_SPLIT_NO_EMPTY) ?: [];
         $bullets = [];
 
-        foreach ($sentences as $sentence) {
-            $sentence = trim($sentence);
-            if (strlen($sentence) > 20 && strlen($sentence) < 300) {
-                $bullets[] = $sentence;
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (preg_match('/^(?:[-*•]|\d+[.)])\s*(.+)$/u', $line, $matches)) {
+                $bullets[] = $matches[1];
             }
         }
 
-        return array_slice($bullets, 0, 5);
+        if (empty($bullets)) {
+            return [];
+        }
+
+        return $this->cleanBullets($bullets);
+    }
+
+    private function aiError(string $message, int $status, array $extra = []): JsonResponse
+    {
+        return response()->json([
+            'message' => $message,
+            'source' => 'error',
+            ...$extra,
+        ], $status);
+    }
+
+    private function cleanScalar(mixed $value): string
+    {
+        $value = trim(preg_replace('/\s+/', ' ', strip_tags((string) $value)) ?? '');
+        $value = preg_replace('/^[-*#\s]+/', '', (string) $value);
+
+        return trim((string) $value);
+    }
+
+    private function sanitizeLogMessage(string $message): string
+    {
+        return preg_replace('/([?&]key=)[^&\s)]+/i', '$1[redacted]', $message) ?? $message;
     }
 }

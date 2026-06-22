@@ -2,6 +2,7 @@ import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import React, { useEffect, useState } from 'react';
 import { API_BASE_URL, type WatchlistPayload } from '../api';
+import EcologicalInsightPanel from './EcologicalInsightPanel';
 import SpeciesMap from './SpeciesMap';
 
 interface TrackerData {
@@ -1117,6 +1118,18 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
               </div>
             </div>
           </div>
+
+          {threatGroups.length > 0 && (
+            <EcologicalInsightPanel
+              commonName={commonName}
+              scientificName={data.identity.scientificName}
+              conservationStatus={`${data.conservation.status} ${data.conservation.statusLabel}`}
+              sections={threatGroups.map(([type, descriptions]) => ({
+                label: formatFacetName(type),
+                text: descriptions.join('\n\n'),
+              }))}
+            />
+          )}
 
           <div className="rounded-2xl border border-white/8 bg-slate-950/55 backdrop-blur-xl p-5">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-5">

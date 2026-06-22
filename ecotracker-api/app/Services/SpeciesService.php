@@ -658,6 +658,8 @@ class SpeciesService
                             'scientific_name' => $record['species'] ?? $record['scientificName'] ?? 'Unknown',
                             'common_name' => $record['vernacularName'] ?? $record['commonName'] ?? null,
                             'conservation_status' => $record['iucnRedListCategory'] ?? 'NE',
+                            'last_observed_at' => $record['eventDate'] ?? null,
+                            'basis_of_record' => $record['basisOfRecord'] ?? null,
                         ];
                     }
                 }
@@ -715,6 +717,8 @@ class SpeciesService
                     'country' => $countryCode,
                     'family' => $info['family'] ?? null,
                     'kingdom' => $info['kingdom'] ?? null,
+                    'last_observed_at' => $info['last_observed_at'] ?? null,
+                    'basis_of_record' => $info['basis_of_record'] ?? null,
                 ];
             }
 

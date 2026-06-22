@@ -242,15 +242,21 @@ class WatchlistMonitoringService
         $oldStatus = strtoupper((string) ($previous['conservation_status'] ?? ''));
         $newStatus = strtoupper((string) ($current['conservation_status'] ?? ''));
         if ($oldStatus !== $newStatus && $newStatus !== '') {
+            $oldStatusText = $this->statusLabel($oldStatus, $previous);
+            $newStatusText = $this->statusLabel($newStatus, $current);
             $changes[] = [
                 'type' => 'status_change',
                 'title' => 'Conservation Status Changed',
-                'message' => "{$name} changed from {$this->statusLabel($oldStatus, $previous)} to {$this->statusLabel($newStatus, $current)}.",
+                'message' => "{$name} conservation status changed from {$oldStatusText} to {$newStatusText}.",
                 'data' => [
                     'previous_status' => $oldStatus ?: null,
                     'new_status' => $newStatus,
                     'previous_status_label' => $previous['conservation_status_label'] ?? null,
                     'new_status_label' => $current['conservation_status_label'] ?? null,
+                    'change_summary' => [
+                        "Previous status: {$oldStatusText}",
+                        "New status: {$newStatusText}",
+                    ],
                 ],
             ];
         }
@@ -260,10 +266,17 @@ class WatchlistMonitoringService
         $oldCount = (int) ($previous['occurrence_count'] ?? 0);
         $newCount = (int) ($current['occurrence_count'] ?? 0);
         if (($newObserved && (!$oldObserved || $newObserved->greaterThan($oldObserved))) || $newCount > $oldCount) {
+            $observationText = $this->formatObservationDate($current['last_observed_at'] ?? null)
+                ?: 'an undated recent GBIF record';
+            $location = trim(implode(', ', array_filter([
+                $current['last_observation_locality'] ?? null,
+                $current['last_observation_country'] ?? null,
+            ])));
+            $locationText = $location !== '' ? " near {$location}" : '';
             $changes[] = [
                 'type' => 'new_sighting',
                 'title' => 'New Species Sighting Detected',
-                'message' => "{$name} has newer GBIF occurrence activity. Records changed from {$oldCount} to {$newCount}.",
+                'message' => "{$name} has newer GBIF occurrence activity. Records changed from {$oldCount} to {$newCount}; latest record is {$observationText}{$locationText}.",
                 'data' => [
                     'previous_occurrence_count' => $oldCount,
                     'new_occurrence_count' => $newCount,
@@ -272,6 +285,13 @@ class WatchlistMonitoringService
                     'last_observation_country' => $current['last_observation_country'] ?? null,
                     'last_observation_locality' => $current['last_observation_locality'] ?? null,
                     'last_occurrence_key' => $current['last_occurrence_key'] ?? null,
+                    'change_summary' => array_values(array_filter([
+                        "Occurrence records: {$oldCount} -> {$newCount}",
+                        $oldObserved || $newObserved
+                            ? 'Latest observation: ' . ($this->formatObservationDate($previous['last_observed_at'] ?? null) ?: 'none') . ' -> ' . ($this->formatObservationDate($current['last_observed_at'] ?? null) ?: 'none')
+                            : null,
+                        $location !== '' ? "Latest location: {$location}" : null,
+                    ])),
                 ],
             ];
         }
@@ -283,34 +303,79 @@ class WatchlistMonitoringService
         if ($previousCountries !== $currentCountries) {
             $added = array_values(array_diff($currentCountries, $previousCountries));
             $removed = array_values(array_diff($previousCountries, $currentCountries));
-            $changes[] = [
-                'type' => 'watchlist_update',
-                'title' => 'Species Range Data Changed',
-                'message' => "{$name} now has GBIF records across {$current['country_count']} countries.",
-                'data' => [
-                    'previous_country_count' => (int) ($previous['country_count'] ?? 0),
-                    'new_country_count' => (int) ($current['country_count'] ?? 0),
-                    'added_countries' => $added,
-                    'removed_countries' => $removed,
-                ],
-            ];
+            $previousCountryCount = (int) ($previous['country_count'] ?? count($previousCountries));
+            $newCountryCount = (int) ($current['country_count'] ?? count($currentCountries));
+            $currentOccurrenceCount = (int) ($current['occurrence_count'] ?? 0);
+
+            if ($newCountryCount > 0 && !($currentOccurrenceCount === 0 && $previousCountryCount > 0)) {
+                $summary = [];
+                $summary[] = "Country facets: {$previousCountryCount} -> {$newCountryCount}";
+                if (!empty($added)) {
+                    $summary[] = 'Added countries: ' . implode(', ', array_slice($added, 0, 8)) . (count($added) > 8 ? ' +' . (count($added) - 8) . ' more' : '');
+                }
+                if (!empty($removed)) {
+                    $summary[] = 'Removed countries: ' . implode(', ', array_slice($removed, 0, 8)) . (count($removed) > 8 ? ' +' . (count($removed) - 8) . ' more' : '');
+                }
+
+                $changes[] = [
+                    'type' => 'watchlist_update',
+                    'title' => 'Species Range Data Changed',
+                    'message' => "{$name} GBIF country coverage changed from {$previousCountryCount} to {$newCountryCount} countries.",
+                    'data' => [
+                        'previous_country_count' => $previousCountryCount,
+                        'new_country_count' => $newCountryCount,
+                        'added_countries' => $added,
+                        'removed_countries' => $removed,
+                        'change_summary' => $summary,
+                    ],
+                ];
+            } else {
+                Log::info('Skipped unreliable empty country-range notification', [
+                    'gbif_species_key' => $current['gbif_species_key'] ?? null,
+                    'previous_country_count' => $previousCountryCount,
+                    'new_country_count' => $newCountryCount,
+                    'current_occurrence_count' => $currentOccurrenceCount,
+                ]);
+            }
         }
 
         $mediaChanged = (int) ($previous['media_count'] ?? 0) !== (int) ($current['media_count'] ?? 0);
         $coordinateChanged = (int) ($previous['coordinate_count'] ?? 0) !== (int) ($current['coordinate_count'] ?? 0);
         $issueChanged = (int) ($previous['issue_count'] ?? 0) !== (int) ($current['issue_count'] ?? 0);
         if ($mediaChanged || $coordinateChanged || $issueChanged) {
+            $previousMedia = (int) ($previous['media_count'] ?? 0);
+            $newMedia = (int) ($current['media_count'] ?? 0);
+            $previousCoordinates = (int) ($previous['coordinate_count'] ?? 0);
+            $newCoordinates = (int) ($current['coordinate_count'] ?? 0);
+            $previousIssues = (int) ($previous['issue_count'] ?? 0);
+            $newIssues = (int) ($current['issue_count'] ?? 0);
+            $summary = [];
+            if ($mediaChanged) {
+                $summary[] = "Photo/media records: {$previousMedia} -> {$newMedia}";
+            }
+            if ($coordinateChanged) {
+                $summary[] = "Mapped coordinate records: {$previousCoordinates} -> {$newCoordinates}";
+            }
+            if ($issueChanged) {
+                $summary[] = "GBIF issue flags: {$previousIssues} -> {$newIssues}";
+            }
+
             $changes[] = [
                 'type' => 'watchlist_update',
                 'title' => 'Evidence and Data Quality Updated',
-                'message' => "{$name} has updated GBIF evidence or data-quality metrics.",
+                'message' => "{$name} has updated GBIF evidence or data-quality metrics: " . implode('; ', $summary) . ".",
                 'data' => [
-                    'previous_media_count' => (int) ($previous['media_count'] ?? 0),
-                    'new_media_count' => (int) ($current['media_count'] ?? 0),
-                    'previous_coordinate_count' => (int) ($previous['coordinate_count'] ?? 0),
-                    'new_coordinate_count' => (int) ($current['coordinate_count'] ?? 0),
-                    'previous_issue_count' => (int) ($previous['issue_count'] ?? 0),
-                    'new_issue_count' => (int) ($current['issue_count'] ?? 0),
+                    'previous_media_count' => $previousMedia,
+                    'new_media_count' => $newMedia,
+                    'previous_coordinate_count' => $previousCoordinates,
+                    'new_coordinate_count' => $newCoordinates,
+                    'previous_issue_count' => $previousIssues,
+                    'new_issue_count' => $newIssues,
+                    'previous_top_issues' => $previous['issues'] ?? [],
+                    'new_top_issues' => $current['issues'] ?? [],
+                    'previous_basis_of_record' => $previous['basis_of_record'] ?? [],
+                    'new_basis_of_record' => $current['basis_of_record'] ?? [],
+                    'change_summary' => $summary,
                 ],
             ];
         }
@@ -358,5 +423,23 @@ class WatchlistMonitoringService
         }
 
         return $code !== '' ? $code : 'unknown status';
+    }
+
+    private function formatObservationDate(mixed $value): ?string
+    {
+        if (!$value) {
+            return null;
+        }
+
+        $text = trim((string) $value);
+        if (preg_match('/^\d{4}$/', $text)) {
+            return $text;
+        }
+
+        try {
+            return Carbon::parse($text)->toFormattedDateString();
+        } catch (\Throwable) {
+            return $text;
+        }
     }
 }

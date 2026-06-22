@@ -48,6 +48,7 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({
   const [showRecordList, setShowRecordList] = useState(false);
   const [yearMode, setYearMode] = useState<'any' | 'range'>('any');
   const [yearRange, setYearRange] = useState<[number, number] | null>(null);
+  const [yearInputs, setYearInputs] = useState<[string, string]>(['', '']);
   const [gbifYearRange, setGbifYearRange] = useState<[number, number] | null>(null);
 
   useEffect(() => {
@@ -114,9 +115,21 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({
   useEffect(() => {
     setYearMode('any');
     setYearRange(availableYearRange);
+    setYearInputs(availableYearRange ? [String(availableYearRange[0]), String(availableYearRange[1])] : ['', '']);
   }, [availableYearRange]);
 
-  const yearRangeActive = yearMode === 'range' && Boolean(availableYearRange && yearRange);
+  useEffect(() => {
+    if (!yearRange) return;
+    setYearInputs([String(yearRange[0]), String(yearRange[1])]);
+  }, [yearRange]);
+
+  const isFullAvailableYearRange = Boolean(
+    availableYearRange &&
+    yearRange &&
+    yearRange[0] <= availableYearRange[0] &&
+    yearRange[1] >= availableYearRange[1]
+  );
+  const yearRangeActive = yearMode === 'range' && Boolean(availableYearRange && yearRange) && !isFullAvailableYearRange;
   const filteredOccurrences = useMemo(() => {
     return occurrences.filter((occ) => {
       if (selectedCountryCodes.length > 0) {
@@ -155,7 +168,7 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({
       if (countryCode) {
         params.set('country', countryCode);
       }
-      if (yearMode === 'range' && availableYearRange && yearRange) {
+      if (yearMode === 'range' && availableYearRange && yearRange && !isFullAvailableYearRange) {
         params.set('year', `${yearRange[0]},${yearRange[1]}`);
       }
       return `https://api.gbif.org/v2/map/occurrence/density/{z}/{x}/{y}@1x.png?${params.toString()}`;
@@ -166,7 +179,7 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({
     }
 
     return [buildUrl()];
-  }, [availableYearRange, selectedCountryCodes, taxonKey, yearMode, yearRange]);
+  }, [availableYearRange, isFullAvailableYearRange, selectedCountryCodes, taxonKey, yearMode, yearRange]);
   const tileUrl = mapStyle === 'dark'
     ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
     : 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png';
@@ -211,6 +224,11 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({
 
   const selectedKey = selectedOccurrence?.key ?? null;
   const formatDate = (value: string | null) => value ? new Date(value).toLocaleDateString() : 'Unknown';
+  const defaultYearRange = () => {
+    if (!availableYearRange) return;
+    setYearRange(availableYearRange);
+    setYearInputs([String(availableYearRange[0]), String(availableYearRange[1])]);
+  };
   const setStartYear = (value: number) => {
     if (!availableYearRange || !yearRange) return;
     const next = Math.max(availableYearRange[0], Math.min(value, yearRange[1]));
@@ -220,6 +238,43 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({
     if (!availableYearRange || !yearRange) return;
     const next = Math.min(availableYearRange[1], Math.max(value, yearRange[0]));
     setYearRange([yearRange[0], next]);
+  };
+  const commitYearInput = (index: 0 | 1) => {
+    if (!availableYearRange || !yearRange) return;
+    const parsed = Number(yearInputs[index]);
+    const invalid = !Number.isInteger(parsed) || parsed < availableYearRange[0] || parsed > availableYearRange[1];
+    if (invalid) {
+      defaultYearRange();
+      return;
+    }
+
+    if (index === 0) {
+      if (parsed > yearRange[1]) {
+        defaultYearRange();
+        return;
+      }
+      setStartYear(parsed);
+      return;
+    }
+
+    if (parsed < yearRange[0]) {
+      defaultYearRange();
+      return;
+    }
+    setEndYear(parsed);
+  };
+  const stepYear = (index: 0 | 1, direction: -1 | 1) => {
+    if (!yearRange) return;
+    if (yearMode !== 'range') {
+      setYearMode('range');
+      return;
+    }
+    setYearMode('range');
+    if (index === 0) {
+      setStartYear(yearRange[0] + direction);
+      return;
+    }
+    setEndYear(yearRange[1] + direction);
   };
   const controls = [
     { label: 'Heatmap', shortLabel: 'Heat', active: showHeatmap, onClick: () => setShowHeatmap((value) => !value) },
@@ -247,18 +302,77 @@ const SpeciesMap: React.FC<SpeciesMapProps> = ({
         >
           Any year
         </button>
-        <button
-          type="button"
+        <div
+          role="button"
+          tabIndex={0}
           onClick={() => setYearMode('range')}
-          aria-pressed={yearMode === 'range'}
-          className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-black transition-colors ${
-            yearMode === 'range'
-              ? 'border-cyan-400/30 bg-cyan-400/12 text-cyan-100'
-              : 'border-transparent text-slate-500 hover:text-slate-300'
-          }`}
-        >
-          {yearRange[0]} - {yearRange[1]}
-        </button>
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              setYearMode('range');
+            }
+          }}
+          className={`shrink-0 flex items-center gap-1 rounded-full border px-2 py-1 ${
+          yearMode === 'range'
+            ? 'border-cyan-400/20 bg-cyan-400/10'
+            : 'border-white/8 bg-white/[0.03] opacity-55'
+        }`}>
+          {([0, 1] as const).map((index) => (
+            <React.Fragment key={index}>
+              {index === 1 && <span className="px-0.5 text-xs font-bold text-slate-500">-</span>}
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  readOnly={yearMode !== 'range'}
+                  value={yearInputs[index]}
+                  onClick={() => setYearMode('range')}
+                  onFocus={() => setYearMode('range')}
+                  onChange={(event) => {
+                    setYearMode('range');
+                    setYearInputs((current) => {
+                      const next: [string, string] = [...current];
+                      next[index] = event.target.value;
+                      return next;
+                    });
+                  }}
+                  onBlur={() => commitYearInput(index)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.currentTarget.blur();
+                    }
+                  }}
+                  className={`h-6 w-14 rounded-md border border-white/8 bg-slate-950/80 px-1.5 text-center text-[11px] font-black outline-none transition-colors focus:border-cyan-300/40 ${
+                    yearMode === 'range' ? 'text-cyan-100' : 'cursor-pointer text-slate-500'
+                  }`}
+                />
+                <div className="flex flex-col">
+                  <button
+                    type="button"
+                    onClick={() => stepYear(index, 1)}
+                    className={`h-3.5 w-4 rounded-t bg-white/[0.05] text-[8px] leading-none hover:bg-cyan-400/15 hover:text-cyan-100 ${
+                      yearMode === 'range' ? 'text-slate-300' : 'text-slate-600'
+                    }`}
+                    aria-label={index === 0 ? 'Increase start year' : 'Increase end year'}
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepYear(index, -1)}
+                    className={`h-3.5 w-4 rounded-b bg-white/[0.05] text-[8px] leading-none hover:bg-cyan-400/15 hover:text-cyan-100 ${
+                      yearMode === 'range' ? 'text-slate-300' : 'text-slate-600'
+                    }`}
+                    aria-label={index === 0 ? 'Decrease start year' : 'Decrease end year'}
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+            </React.Fragment>
+          ))}
+        </div>
         <div className="relative h-8 flex-1">
           <div className="absolute left-0 right-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/10" />
           {yearMode === 'range' && (

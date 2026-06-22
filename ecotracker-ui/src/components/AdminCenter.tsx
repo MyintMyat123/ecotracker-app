@@ -1,11 +1,19 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { apiRequest, type AdminUser, type AdminStats } from '../api';
+import { API_BASE_URL, apiRequest, type AdminUser, type AdminStats } from '../api';
+import type { Species } from './SpeciesSearch';
 
 interface AdminCenterProps {
   token: string;
 }
 
 type AdminTab = 'dashboard' | 'users' | 'broadcast';
+
+interface SpeciesAttachment {
+  gbif_species_key: number;
+  common_name: string | null;
+  scientific_name: string;
+  conservation_status: string | null;
+}
 
 const statusColors: Record<string, string> = {
   'Critically Endangered': 'bg-red-500/15 text-red-300 border-red-500/25',
@@ -25,7 +33,12 @@ const AdminCenter: React.FC<AdminCenterProps> = ({ token }) => {
   const [roleFilter, setRoleFilter] = useState('');
   const [broadcastTitle, setBroadcastTitle] = useState('');
   const [broadcastMessage, setBroadcastMessage] = useState('');
-  const [broadcastUserId, setBroadcastUserId] = useState('');
+  const [recipientQuery, setRecipientQuery] = useState('');
+  const [recipientSuggestions, setRecipientSuggestions] = useState<AdminUser[]>([]);
+  const [selectedRecipients, setSelectedRecipients] = useState<AdminUser[]>([]);
+  const [speciesQuery, setSpeciesQuery] = useState('');
+  const [speciesSuggestions, setSpeciesSuggestions] = useState<Species[]>([]);
+  const [attachedSpecies, setAttachedSpecies] = useState<SpeciesAttachment[]>([]);
   const [broadcastStatus, setBroadcastStatus] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<number | null>(null);
   const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
@@ -66,6 +79,78 @@ const AdminCenter: React.FC<AdminCenterProps> = ({ token }) => {
     if (tab === 'users') loadUsers();
   }, [tab, loadStats, loadUsers]);
 
+  const getSpeciesDisplayName = (species: Species) => {
+    const s = species as Species & { vernacularNames?: Array<{ language: string; vernacularName: string }> };
+    const english = s.vernacularNames?.find((name) => name.language === 'eng');
+    return english?.vernacularName || s.vernacularNames?.[0]?.vernacularName || species.canonicalName || species.scientificName;
+  };
+
+  useEffect(() => {
+    if (tab !== 'broadcast' || recipientQuery.trim().length < 2) {
+      setRecipientSuggestions([]);
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ search: recipientQuery.trim(), page: '1' });
+        const data = await apiRequest<{ data: AdminUser[] }>(`/admin/users?${params}`, { token });
+        setRecipientSuggestions(
+          (data.data || []).filter((user) => !selectedRecipients.some((selected) => selected.id === user.id))
+        );
+      } catch {
+        setRecipientSuggestions([]);
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [recipientQuery, selectedRecipients, tab, token]);
+
+  useEffect(() => {
+    if (tab !== 'broadcast' || speciesQuery.trim().length < 2) {
+      setSpeciesSuggestions([]);
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/species/suggest?query=${encodeURIComponent(speciesQuery.trim())}`);
+        if (!response.ok) throw new Error('Species suggestion failed');
+        const data = await response.json();
+        setSpeciesSuggestions(
+          (data || []).filter((species: Species) =>
+            !attachedSpecies.some((attached) => attached.gbif_species_key === species.key)
+          )
+        );
+      } catch {
+        setSpeciesSuggestions([]);
+      }
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [attachedSpecies, speciesQuery, tab]);
+
+  const addRecipient = (user: AdminUser) => {
+    setSelectedRecipients((prev) => (prev.some((selected) => selected.id === user.id) ? prev : [...prev, user]));
+    setRecipientQuery('');
+    setRecipientSuggestions([]);
+  };
+
+  const addSpeciesAttachment = (species: Species) => {
+    const attachment: SpeciesAttachment = {
+      gbif_species_key: species.key,
+      common_name: getSpeciesDisplayName(species),
+      scientific_name: species.scientificName,
+      conservation_status: species.iucnRedListStatus?.code ?? null,
+    };
+
+    setAttachedSpecies((prev) =>
+      prev.some((item) => item.gbif_species_key === attachment.gbif_species_key) ? prev : [...prev, attachment]
+    );
+    setSpeciesQuery('');
+    setSpeciesSuggestions([]);
+  };
+
   const updateUser = async (id: number, changes: Partial<AdminUser>) => {
     setActionLoading(id);
     try {
@@ -101,8 +186,9 @@ const AdminCenter: React.FC<AdminCenterProps> = ({ token }) => {
     e.preventDefault();
     setBroadcastStatus(null);
     try {
-      const body: Record<string, string> = { title: broadcastTitle, message: broadcastMessage };
-      if (broadcastUserId) body.user_id = broadcastUserId;
+      const body: Record<string, unknown> = { title: broadcastTitle, message: broadcastMessage };
+      if (selectedRecipients.length > 0) body.user_ids = selectedRecipients.map((user) => user.id);
+      if (attachedSpecies.length > 0) body.species = attachedSpecies;
       const res = await apiRequest<{ message: string }>('/admin/notifications/broadcast', {
         method: 'POST',
         token,
@@ -111,7 +197,12 @@ const AdminCenter: React.FC<AdminCenterProps> = ({ token }) => {
       setBroadcastStatus(res.message);
       setBroadcastTitle('');
       setBroadcastMessage('');
-      setBroadcastUserId('');
+      setRecipientQuery('');
+      setSelectedRecipients([]);
+      setRecipientSuggestions([]);
+      setSpeciesQuery('');
+      setAttachedSpecies([]);
+      setSpeciesSuggestions([]);
     } catch (err) {
       setBroadcastStatus(err instanceof Error ? err.message : 'Failed to send');
     }
@@ -267,6 +358,7 @@ const AdminCenter: React.FC<AdminCenterProps> = ({ token }) => {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-white/8">
+                      <th className="text-left px-4 py-3 text-[10px] uppercase tracking-[0.2em] text-slate-500 font-semibold">ID</th>
                       <th className="text-left px-4 py-3 text-[10px] uppercase tracking-[0.2em] text-slate-500 font-semibold">User</th>
                       <th className="text-left px-4 py-3 text-[10px] uppercase tracking-[0.2em] text-slate-500 font-semibold">Role</th>
                       <th className="text-left px-4 py-3 text-[10px] uppercase tracking-[0.2em] text-slate-500 font-semibold">Status</th>
@@ -278,6 +370,9 @@ const AdminCenter: React.FC<AdminCenterProps> = ({ token }) => {
                   <tbody>
                     {users.map((user) => (
                       <tr key={user.id} className="border-b border-white/5 hover:bg-white/3 transition-colors">
+                        <td className="px-4 py-3">
+                          <span className="font-mono text-xs text-slate-400">#{user.id}</span>
+                        </td>
                         <td className="px-4 py-3">
                           <div>
                             <p className="text-white font-medium">{user.name}</p>
@@ -373,11 +468,11 @@ const AdminCenter: React.FC<AdminCenterProps> = ({ token }) => {
 
       {/* Broadcast Tab */}
       {tab === 'broadcast' && (
-        <div className="max-w-2xl">
+        <div className="max-w-4xl">
           <div className="rounded-2xl border border-white/8 bg-slate-950/55 backdrop-blur-xl p-6">
             <h3 className="text-lg font-bold text-white mb-2">Send Notification</h3>
             <p className="text-slate-400 text-sm mb-6">
-              Send a notification to all active users or a specific user.
+              Send an admin broadcast to all active users, or select specific recipients and attach relevant species records.
             </p>
 
             <form onSubmit={sendBroadcast} className="space-y-4">
@@ -411,15 +506,119 @@ const AdminCenter: React.FC<AdminCenterProps> = ({ token }) => {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-400 uppercase tracking-[0.2em] mb-2">
-                  Target User ID (optional — leave blank to send to all)
+                  Recipients
                 </label>
-                <input
-                  type="number"
-                  value={broadcastUserId}
-                  onChange={(e) => setBroadcastUserId(e.target.value)}
-                  placeholder="User ID (e.g. 5)"
-                  className="w-full bg-slate-900/80 border border-white/10 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={recipientQuery}
+                    onChange={(e) => setRecipientQuery(e.target.value)}
+                    placeholder="Search users by name or email. Leave empty to broadcast to all active users."
+                    className="w-full bg-slate-900/80 border border-white/10 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50"
+                  />
+                  {recipientSuggestions.length > 0 && (
+                    <div className="absolute z-20 mt-2 w-full overflow-hidden rounded-xl border border-white/10 bg-slate-950 shadow-2xl">
+                      {recipientSuggestions.slice(0, 8).map((user) => (
+                        <button
+                          key={user.id}
+                          type="button"
+                          onClick={() => addRecipient(user)}
+                          className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-white/[0.05] transition-colors"
+                        >
+                          <span>
+                            <span className="block text-sm font-semibold text-slate-100">{user.name}</span>
+                            <span className="block text-xs text-slate-500">{user.email}</span>
+                          </span>
+                          <span className="font-mono text-[11px] text-emerald-300">#{user.id}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {selectedRecipients.length === 0 ? (
+                    <span className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold text-cyan-200">
+                      All active users
+                    </span>
+                  ) : (
+                    selectedRecipients.map((user) => (
+                      <span
+                        key={user.id}
+                        className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-xs font-semibold text-emerald-100"
+                      >
+                        #{user.id} {user.name}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRecipients((prev) => prev.filter((item) => item.id !== user.id))}
+                          className="text-emerald-200/70 hover:text-white"
+                          aria-label={`Remove ${user.name}`}
+                        >
+                          x
+                        </button>
+                      </span>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-[0.2em] mb-2">
+                  Attached species
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={speciesQuery}
+                    onChange={(e) => setSpeciesQuery(e.target.value)}
+                    placeholder="Search species to attach to this broadcast..."
+                    className="w-full bg-slate-900/80 border border-white/10 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50"
+                  />
+                  {speciesSuggestions.length > 0 && (
+                    <div className="absolute z-20 mt-2 w-full overflow-hidden rounded-xl border border-white/10 bg-slate-950 shadow-2xl">
+                      {speciesSuggestions.slice(0, 8).map((species) => (
+                        <button
+                          key={species.key}
+                          type="button"
+                          onClick={() => addSpeciesAttachment(species)}
+                          className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-white/[0.05] transition-colors"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-semibold text-slate-100">{getSpeciesDisplayName(species)}</span>
+                            <span className="block truncate text-xs italic text-slate-500">{species.scientificName}</span>
+                          </span>
+                          {species.iucnRedListStatus?.code && (
+                            <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-2 py-1 text-[10px] font-bold text-amber-200">
+                              {species.iucnRedListStatus.code}
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {attachedSpecies.length > 0 && (
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {attachedSpecies.map((species) => (
+                      <div
+                        key={species.gbif_species_key}
+                        className="flex items-start justify-between gap-3 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5"
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-xs font-bold text-white">{species.common_name || species.scientific_name}</span>
+                          <span className="block truncate text-[11px] italic text-slate-500">{species.scientific_name}</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setAttachedSpecies((prev) => prev.filter((item) => item.gbif_species_key !== species.gbif_species_key))}
+                          className="text-xs font-bold text-slate-500 hover:text-red-300"
+                          aria-label={`Remove ${species.common_name || species.scientific_name}`}
+                        >
+                          x
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {broadcastStatus && (
@@ -436,7 +635,7 @@ const AdminCenter: React.FC<AdminCenterProps> = ({ token }) => {
                 type="submit"
                 className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-white font-semibold rounded-xl transition-all"
               >
-                {broadcastUserId ? 'Send to User' : 'Broadcast to All Users'}
+                {selectedRecipients.length > 0 ? `Send to ${selectedRecipients.length} selected user(s)` : 'Broadcast to All Active Users'}
               </button>
             </form>
           </div>

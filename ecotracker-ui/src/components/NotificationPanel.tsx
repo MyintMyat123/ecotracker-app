@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { apiRequest, type AppNotification } from '../api';
 
 interface NotificationPanelProps {
@@ -29,19 +29,43 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({ token, onOpenNoti
   const [loading, setLoading] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
+  const fetchUnread = useCallback(async () => {
+    try {
+      const data = await apiRequest<{ unread_count: number }>('/notifications/unread-count', { token });
+      setUnreadCount(data.unread_count);
+    } catch {
+      // silent
+    }
+  }, [token]);
+
+  const loadNotifications = useCallback(async (showLoading = false) => {
+    if (showLoading) setLoading(true);
+    try {
+      const data = await apiRequest<{ notifications: AppNotification[]; unread_count: number }>(
+        '/notifications',
+        { token }
+      );
+      setNotifications(data.notifications);
+      setUnreadCount(data.unread_count);
+    } catch {
+      // silent
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  }, [token]);
+
   useEffect(() => {
-    const fetchUnread = async () => {
-      try {
-        const data = await apiRequest<{ unread_count: number }>('/notifications/unread-count', { token });
-        setUnreadCount(data.unread_count);
-      } catch {
-        // silent
-      }
-    };
     fetchUnread();
     const interval = setInterval(fetchUnread, 30000);
     return () => clearInterval(interval);
-  }, [token]);
+  }, [fetchUnread]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    loadNotifications(notifications.length === 0);
+    const interval = setInterval(() => loadNotifications(false), 15000);
+    return () => clearInterval(interval);
+  }, [open, loadNotifications, notifications.length]);
 
   useEffect(() => {
     const handler = (event: MouseEvent) => {
@@ -55,21 +79,7 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({ token, onOpenNoti
 
   const openPanel = async () => {
     setOpen(true);
-    if (notifications.length === 0) {
-      setLoading(true);
-      try {
-        const data = await apiRequest<{ notifications: AppNotification[]; unread_count: number }>(
-          '/notifications',
-          { token }
-        );
-        setNotifications(data.notifications);
-        setUnreadCount(data.unread_count);
-      } catch {
-        // silent
-      } finally {
-        setLoading(false);
-      }
-    }
+    await loadNotifications(notifications.length === 0);
   };
 
   const markRead = async (id: number) => {
@@ -79,6 +89,7 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({ token, onOpenNoti
         prev.map((notification) => (notification.id === id ? { ...notification, is_read: true } : notification))
       );
       setUnreadCount((count) => Math.max(0, count - 1));
+      await loadNotifications(false);
     } catch {
       // silent
     }
@@ -89,6 +100,7 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({ token, onOpenNoti
       await apiRequest('/notifications/mark-all-read', { method: 'POST', token });
       setNotifications((prev) => prev.map((notification) => ({ ...notification, is_read: true })));
       setUnreadCount(0);
+      await loadNotifications(false);
     } catch {
       // silent
     }
@@ -100,6 +112,7 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({ token, onOpenNoti
       const removed = notifications.find((notification) => notification.id === id);
       setNotifications((prev) => prev.filter((notification) => notification.id !== id));
       if (removed && !removed.is_read) setUnreadCount((count) => Math.max(0, count - 1));
+      await loadNotifications(false);
     } catch {
       // silent
     }

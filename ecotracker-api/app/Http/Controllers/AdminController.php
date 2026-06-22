@@ -154,15 +154,53 @@ class AdminController extends Controller
     public function broadcastNotification(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'title'   => 'required|string|max:255',
-            'message' => 'required|string',
-            'user_id' => 'sometimes|exists:users,id',
+            'title'                         => 'required|string|max:255',
+            'message'                       => 'required|string',
+            'user_id'                       => 'sometimes|exists:users,id',
+            'user_ids'                      => 'sometimes|array',
+            'user_ids.*'                    => 'integer|exists:users,id',
+            'species'                       => 'sometimes|array|max:10',
+            'species.*.gbif_species_key'    => 'required_with:species|integer|min:1',
+            'species.*.common_name'         => 'nullable|string|max:255',
+            'species.*.scientific_name'     => 'required_with:species|string|max:255',
+            'species.*.conservation_status' => 'nullable|string|max:80',
         ]);
 
-        if (isset($validated['user_id'])) {
+        if (!empty($validated['user_ids'])) {
+            $users = User::whereIn('id', array_unique($validated['user_ids']))->get();
+        } elseif (isset($validated['user_id'])) {
             $users = User::where('id', $validated['user_id'])->get();
         } else {
             $users = User::where('is_active', true)->get();
+        }
+
+        $attachedSpecies = collect($validated['species'] ?? [])
+            ->map(fn(array $species) => [
+                'gbif_species_key'    => (int) $species['gbif_species_key'],
+                'species_name'        => ($species['common_name'] ?? null) ?: $species['scientific_name'],
+                'common_name'         => $species['common_name'] ?? null,
+                'scientific_name'     => $species['scientific_name'],
+                'conservation_status' => $species['conservation_status'] ?? null,
+            ])
+            ->values()
+            ->all();
+
+        $data = [
+            'from'            => 'admin',
+            'recipient_scope' => !empty($validated['user_ids']) || isset($validated['user_id']) ? 'selected_users' : 'all_active_users',
+        ];
+
+        if (!empty($attachedSpecies)) {
+            $data['attached_species'] = $attachedSpecies;
+            $data['species_count'] = count($attachedSpecies);
+
+            if (count($attachedSpecies) === 1) {
+                $species = $attachedSpecies[0];
+                $data['gbif_species_key'] = $species['gbif_species_key'];
+                $data['species_name'] = $species['species_name'];
+                $data['scientific_name'] = $species['scientific_name'];
+                $data['conservation_status'] = $species['conservation_status'];
+            }
         }
 
         foreach ($users as $user) {
@@ -170,7 +208,7 @@ class AdminController extends Controller
                 'type'    => 'system',
                 'title'   => $validated['title'],
                 'message' => $validated['message'],
-                'data'    => ['from' => 'admin'],
+                'data'    => $data,
             ]);
         }
 

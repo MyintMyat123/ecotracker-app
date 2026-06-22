@@ -74,11 +74,29 @@ const formatKey = (key: string) =>
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 
-const formatValue = (value: unknown) => {
+const formatValue = (value: unknown): string => {
   if (value === null || value === undefined || value === '') return 'Not provided';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-  if (typeof value === 'object') return JSON.stringify(value, null, 2);
+  if (Array.isArray(value)) return value.length ? value.map((item) => formatValue(item)).join(', ') : 'None';
+  if (typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => `${formatKey(key)}: ${formatValue(item)}`)
+      .join('\n');
+  }
   return String(value);
+};
+
+const normalizeAttachedSpecies = (value: unknown) => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => item as Record<string, unknown>)
+    .filter((item) => Number(item.gbif_species_key ?? item.species_key) > 0)
+    .map((item) => ({
+      gbif_species_key: Number(item.gbif_species_key ?? item.species_key),
+      species_name: String(item.species_name ?? item.common_name ?? item.scientific_name ?? 'Attached species'),
+      scientific_name: item.scientific_name ? String(item.scientific_name) : null,
+      conservation_status: item.conservation_status ? String(item.conservation_status).toUpperCase() : null,
+    }));
 };
 
 const NotificationDetailPage: React.FC<NotificationDetailPageProps> = ({ notification, onBack, onOpenTracker }) => {
@@ -104,7 +122,12 @@ const NotificationDetailPage: React.FC<NotificationDetailPageProps> = ({ notific
   const speciesKey = Number(payload.gbif_species_key ?? payload.species_key ?? payload.usageKey ?? payload.taxonKey);
   const speciesName = String(payload.species_name ?? payload.common_name ?? payload.scientific_name ?? notification.title);
   const conservationStatus = typeof payload.conservation_status === 'string' ? payload.conservation_status.toUpperCase() : null;
-  const payloadEntries = Object.entries(payload).filter(([, value]) => value !== null && value !== undefined && value !== '');
+  const changeSummary = Array.isArray(payload.change_summary) ? payload.change_summary.filter(Boolean).map(String) : [];
+  const attachedSpecies = normalizeAttachedSpecies(payload.attached_species);
+  const hiddenPayloadKeys = new Set(['change_summary', 'attached_species']);
+  const payloadEntries = Object.entries(payload).filter(([key, value]) =>
+    !hiddenPayloadKeys.has(key) && value !== null && value !== undefined && value !== ''
+  );
   const isSpeciesNotice = Number.isFinite(speciesKey) && speciesKey > 0;
 
   return (
@@ -201,6 +224,51 @@ const NotificationDetailPage: React.FC<NotificationDetailPageProps> = ({ notific
               <h2 className="mt-1 text-lg font-bold text-white">Details from the notification payload</h2>
             </div>
           </div>
+
+          {changeSummary.length > 0 && (
+            <div className="mb-5 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4">
+              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200">What changed</p>
+              <div className="mt-3 grid gap-2">
+                {changeSummary.map((line, index) => (
+                  <div key={`${line}-${index}`} className="rounded-xl border border-cyan-400/10 bg-slate-950/35 px-3 py-2 text-sm font-semibold text-cyan-50">
+                    {line}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {attachedSpecies.length > 0 && (
+            <div className="mb-5 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4">
+              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-emerald-200">Attached species</p>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                {attachedSpecies.map((species) => (
+                  <div key={species.gbif_species_key} className="rounded-xl border border-emerald-400/10 bg-slate-950/35 px-4 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-bold text-white">{species.species_name}</p>
+                        {species.scientific_name && (
+                          <p className="mt-1 truncate text-xs italic text-slate-400">{species.scientific_name}</p>
+                        )}
+                        {species.conservation_status && (
+                          <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.14em] text-amber-200">
+                            {species.conservation_status}: {statusLabels[species.conservation_status] || 'Conservation status'}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onOpenTracker({ usageKey: species.gbif_species_key, commonName: species.species_name })}
+                        className="shrink-0 rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-200 hover:bg-emerald-400/15 transition-colors"
+                      >
+                        Tracker
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {payloadEntries.length > 0 ? (
             <div className="grid gap-3 md:grid-cols-2">
