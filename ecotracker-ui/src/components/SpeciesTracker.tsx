@@ -1119,18 +1119,6 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
             </div>
           </div>
 
-          {threatGroups.length > 0 && (
-            <EcologicalInsightPanel
-              commonName={commonName}
-              scientificName={data.identity.scientificName}
-              conservationStatus={`${data.conservation.status} ${data.conservation.statusLabel}`}
-              sections={threatGroups.map(([type, descriptions]) => ({
-                label: formatFacetName(type),
-                text: descriptions.join('\n\n'),
-              }))}
-            />
-          )}
-
           <div className="rounded-2xl border border-white/8 bg-slate-950/55 backdrop-blur-xl p-5">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-5">
               <div>
@@ -1149,10 +1137,21 @@ const SpeciesTracker: React.FC<SpeciesTrackerProps> = ({
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {threatGroups.map(([type, descriptions]) => {
                     const colorClass = threatTypeColors[type] || 'text-slate-300 bg-white/5 border-white/10';
+                    const sectionLabel = formatFacetName(type);
+                    const sectionText = descriptions.join('\n\n');
                     return (
                       <div key={type} className="rounded-2xl border border-white/8 bg-white/3 p-4 flex flex-col">
-                        <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] uppercase tracking-[0.2em] font-black border w-fit mb-3 ${colorClass}`}>
-                          {type.replace(/_/g, ' ')}
+                        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                          <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] uppercase tracking-[0.2em] font-black border w-fit ${colorClass}`}>
+                            {sectionLabel}
+                          </div>
+                          <EcologicalInsightPanel
+                            label={sectionLabel}
+                            text={sectionText}
+                            commonName={commonName}
+                            scientificName={data.identity.scientificName}
+                            conservationStatus={`${data.conservation.status} ${data.conservation.statusLabel}`}
+                          />
                         </div>
                         <div className="space-y-2 overflow-y-auto max-h-56 custom-scrollbar flex-1 pr-1">
                           {descriptions.map((desc, index) => (
