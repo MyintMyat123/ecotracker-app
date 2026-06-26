@@ -102,6 +102,20 @@ const NotificationsPage: React.FC<NotificationsPageProps> = ({ token, onOpenNoti
     }
   };
 
+  const clearAllNotifications = async () => {
+    if (notifications.length === 0) return;
+    const confirmed = window.confirm('Clear all notifications? This cannot be undone.');
+    if (!confirmed) return;
+
+    try {
+      await apiRequest('/notifications', { method: 'DELETE', token });
+      setNotifications([]);
+      setFilter('all');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to clear notifications.');
+    }
+  };
+
   return (
     <div className="max-w-5xl mx-auto px-4 md:px-6 py-8">
       <div className="mb-8 flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
@@ -138,6 +152,15 @@ const NotificationsPage: React.FC<NotificationsPageProps> = ({ token, onOpenNoti
               className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-4 py-2 text-xs font-bold text-emerald-200 hover:bg-emerald-400/15 transition-colors"
             >
               Mark all read
+            </button>
+          )}
+          {notifications.length > 0 && (
+            <button
+              type="button"
+              onClick={clearAllNotifications}
+              className="rounded-full border border-red-400/25 bg-red-400/10 px-4 py-2 text-xs font-bold text-red-200 hover:bg-red-400/15 transition-colors"
+            >
+              Clear all
             </button>
           )}
         </div>

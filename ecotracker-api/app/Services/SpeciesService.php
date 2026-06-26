@@ -84,8 +84,13 @@ class SpeciesService
     {
         $map = [
             'ANIMALIA' => '1',
+            'ARCHAEA' => '2',
+            'BACTERIA' => '3',
+            'CHROMISTA' => '4',
             'PLANTAE' => '6',
             'FUNGI' => '5',
+            'PROTOZOA' => '7',
+            'VIRUSES' => '8',
         ];
 
         $normalized = strtoupper(trim((string)$kingdom));

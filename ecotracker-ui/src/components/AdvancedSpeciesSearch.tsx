@@ -13,6 +13,8 @@ interface AdvancedSpeciesSearchProps {
 }
 
 const STATUS_OPTIONS = [
+  { code: 'CR,EN,VU', label: 'Threatened: CR + EN + VU' },
+  { code: 'EX,EW', label: 'Extinct / Extinct in the Wild' },
   { code: 'CR', label: 'Critically Endangered' },
   { code: 'EN', label: 'Endangered' },
   { code: 'VU', label: 'Vulnerable' },
@@ -40,6 +42,11 @@ const getDisplayName = (species: Species) => {
   return english?.vernacularName || s.vernacularNames?.[0]?.vernacularName || species.canonicalName || species.scientificName;
 };
 
+const getStatusWeight = (species: Species) => {
+  const code = species.iucnRedListStatus?.code || 'NE';
+  return ['EX', 'EW', 'CR', 'EN', 'VU', 'NT', 'LC', 'DD', 'NE'].indexOf(code);
+};
+
 const AdvancedSpeciesSearch: React.FC<AdvancedSpeciesSearchProps> = ({
   isAuthenticated,
   watchlist,
@@ -54,6 +61,7 @@ const AdvancedSpeciesSearch: React.FC<AdvancedSpeciesSearchProps> = ({
   const [status, setStatus] = useState('');
   const [rank, setRank] = useState('SPECIES');
   const [limit, setLimit] = useState(40);
+  const [sortBy, setSortBy] = useState('threat');
   const [results, setResults] = useState<Species[]>([]);
   const [suggestions, setSuggestions] = useState<Species[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -68,21 +76,37 @@ const AdvancedSpeciesSearch: React.FC<AdvancedSpeciesSearchProps> = ({
       return;
     }
 
+    const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/species/suggest?query=${encodeURIComponent(query.trim())}`);
+        const response = await fetch(`${API_BASE_URL}/species/suggest?query=${encodeURIComponent(query.trim())}`, {
+          signal: controller.signal,
+        });
         if (response.ok) {
           const data = await response.json();
           setSuggestions(data || []);
           setShowSuggestions(true);
         }
-      } catch {
-        // Suggestions should not block the main search flow.
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
       }
     }, 250);
 
-    return () => window.clearTimeout(timer);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
   }, [query]);
+
+  const sortedResults = React.useMemo(() => {
+    return [...results].sort((a, b) => {
+      if (sortBy === 'name') return getDisplayName(a).localeCompare(getDisplayName(b));
+      if (sortBy === 'scientific') return (a.scientificName || '').localeCompare(b.scientificName || '');
+      if (sortBy === 'kingdom') return (a.kingdom || '').localeCompare(b.kingdom || '') || getStatusWeight(a) - getStatusWeight(b);
+      if (sortBy === 'family') return (a.family || '').localeCompare(b.family || '') || getStatusWeight(a) - getStatusWeight(b);
+      return getStatusWeight(a) - getStatusWeight(b) || getDisplayName(a).localeCompare(getDisplayName(b));
+    });
+  }, [results, sortBy]);
 
   const handleSearch = async (event?: React.FormEvent, explicitQuery?: string) => {
     event?.preventDefault();
@@ -143,7 +167,7 @@ const AdvancedSpeciesSearch: React.FC<AdvancedSpeciesSearchProps> = ({
           <span className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Ordered by threat status</span>
         </div>
 
-        <form onSubmit={handleSearch} className="mt-6 grid grid-cols-1 lg:grid-cols-[minmax(240px,1fr)_170px_170px_150px_130px] gap-3">
+        <form onSubmit={handleSearch} className="mt-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-[minmax(260px,1fr)_190px_170px_150px_140px] gap-3">
           <div className="relative">
             <input
               value={query}
@@ -184,17 +208,43 @@ const AdvancedSpeciesSearch: React.FC<AdvancedSpeciesSearchProps> = ({
             <option value="ANIMALIA">Animals</option>
             <option value="PLANTAE">Plants</option>
             <option value="FUNGI">Fungi</option>
+            <option value="CHROMISTA">Chromists</option>
+            <option value="PROTOZOA">Protozoa</option>
+            <option value="BACTERIA">Bacteria</option>
           </select>
           <select value={rank} onChange={(event) => setRank(event.target.value)} className="h-11 rounded-xl border border-white/10 bg-slate-950 px-3 text-sm text-slate-200 outline-none focus:border-emerald-400/50">
             <option value="SPECIES">Species</option>
             <option value="SUBSPECIES">Subspecies</option>
+            <option value="VARIETY">Variety</option>
+            <option value="GENUS">Genus</option>
           </select>
           <select value={limit} onChange={(event) => setLimit(Number(event.target.value))} className="h-11 rounded-xl border border-white/10 bg-slate-950 px-3 text-sm text-slate-200 outline-none focus:border-emerald-400/50">
             <option value={20}>20 results</option>
             <option value={40}>40 results</option>
             <option value={80}>80 results</option>
+            <option value={100}>100 results</option>
           </select>
-          <button type="submit" disabled={loading || query.trim().length < 2} className="lg:col-span-5 h-11 rounded-xl bg-emerald-500 text-sm font-bold text-white hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-500 transition-colors">
+          <select value={sortBy} onChange={(event) => setSortBy(event.target.value)} className="h-11 rounded-xl border border-white/10 bg-slate-950 px-3 text-sm text-slate-200 outline-none focus:border-emerald-400/50">
+            <option value="threat">Sort: threat first</option>
+            <option value="name">Sort: common name</option>
+            <option value="scientific">Sort: scientific name</option>
+            <option value="kingdom">Sort: kingdom</option>
+            <option value="family">Sort: family</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => {
+              setStatus('');
+              setKingdom('');
+              setRank('SPECIES');
+              setLimit(40);
+              setSortBy('threat');
+            }}
+            className="h-11 rounded-xl border border-white/10 bg-white/[0.03] text-sm font-bold text-slate-300 transition-colors hover:bg-white/[0.06]"
+          >
+            Reset filters
+          </button>
+          <button type="submit" disabled={loading || query.trim().length < 2} className="md:col-span-2 xl:col-span-full h-11 rounded-xl bg-emerald-500 text-sm font-bold text-white hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-500 transition-colors">
             {loading ? 'Searching...' : 'Search species'}
           </button>
         </form>
@@ -204,8 +254,8 @@ const AdvancedSpeciesSearch: React.FC<AdvancedSpeciesSearchProps> = ({
 
       <section className="relative z-10 rounded-2xl border border-white/8 bg-slate-950/40 backdrop-blur-xl p-4 md:p-5">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-white">{searched ? `${results.length} matching records` : 'Search results'}</h2>
-          <span className="text-[10px] uppercase tracking-[0.2em] text-slate-500">CR first</span>
+          <h2 className="text-sm font-semibold text-white">{searched ? `${sortedResults.length} matching records` : 'Search results'}</h2>
+          <span className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{sortBy === 'threat' ? 'CR first' : 'Custom sort'}</span>
         </div>
 
         {loading && <div className="py-12 text-center text-sm text-slate-500">Searching GBIF...</div>}
@@ -214,9 +264,9 @@ const AdvancedSpeciesSearch: React.FC<AdvancedSpeciesSearchProps> = ({
           <div className="py-12 text-center text-sm text-slate-500">No species matched those filters.</div>
         )}
 
-        {!loading && results.length > 0 && (
+        {!loading && sortedResults.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {results.map((species) => {
+            {sortedResults.map((species) => {
               const code = species.iucnRedListStatus?.code || 'NE';
               const saved = isSaved(species.key);
               return (

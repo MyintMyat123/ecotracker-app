@@ -118,6 +118,20 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({ token, onOpenNoti
     }
   };
 
+  const clearAllNotifications = async () => {
+    if (notifications.length === 0) return;
+    const confirmed = window.confirm('Clear all notifications? This cannot be undone.');
+    if (!confirmed) return;
+
+    try {
+      await apiRequest('/notifications', { method: 'DELETE', token });
+      setNotifications([]);
+      setUnreadCount(0);
+    } catch {
+      // silent
+    }
+  };
+
   const viewNotification = async (notification: AppNotification) => {
     const selected = { ...notification, is_read: true };
     setOpen(false);
@@ -172,6 +186,15 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({ token, onOpenNoti
                   className="text-[10px] text-emerald-400 hover:text-emerald-300 font-semibold uppercase tracking-wide"
                 >
                   Mark all read
+                </button>
+              )}
+              {notifications.length > 0 && (
+                <button
+                  type="button"
+                  onClick={clearAllNotifications}
+                  className="text-[10px] text-red-300 hover:text-red-200 font-semibold uppercase tracking-wide"
+                >
+                  Clear all
                 </button>
               )}
               <button
