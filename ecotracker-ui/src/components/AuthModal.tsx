@@ -20,9 +20,15 @@ const AuthModal: React.FC<AuthModalProps> = ({ open, onClose, onSuccess, default
 
   if (!open) return null;
 
+  const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (!isValidEmail(email)) {
+      setError('Enter a valid email address.');
+      return;
+    }
     setLoading(true);
     try {
       if (mode === 'login') {
@@ -95,7 +101,7 @@ const AuthModal: React.FC<AuthModalProps> = ({ open, onClose, onSuccess, default
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} noValidate className="space-y-4">
             {mode === 'register' && (
               <div>
                 <label className="block text-xs font-semibold text-slate-400 uppercase tracking-[0.18em] mb-2">Name</label>
@@ -115,7 +121,10 @@ const AuthModal: React.FC<AuthModalProps> = ({ open, onClose, onSuccess, default
               <input
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (error === 'Enter a valid email address.') setError(null);
+                }}
                 required
                 placeholder="you@example.com"
                 className="w-full bg-slate-800/80 border border-white/10 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50 transition-colors"

@@ -15,10 +15,18 @@ const AuthPanel: React.FC<AuthPanelProps> = ({ onAuthenticated, mode, onSwitchMo
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    setLoading(true);
     setError(null);
+
+    if (!isValidEmail(email)) {
+      setError('Enter a valid email address.');
+      return;
+    }
+
+    setLoading(true);
 
     try {
       const result = await apiRequest<{ user: AuthUser; token: string }>(
@@ -57,7 +65,7 @@ const AuthPanel: React.FC<AuthPanelProps> = ({ onAuthenticated, mode, onSwitchMo
           </div>
         </div>
 
-        <form onSubmit={submit} className="space-y-4 mt-6">
+        <form onSubmit={submit} noValidate className="space-y-4 mt-6">
           {mode === 'register' && (
             <input
               value={name}
@@ -69,7 +77,10 @@ const AuthPanel: React.FC<AuthPanelProps> = ({ onAuthenticated, mode, onSwitchMo
           <input
             type="email"
             value={email}
-            onChange={(event) => setEmail(event.target.value)}
+            onChange={(event) => {
+              setEmail(event.target.value);
+              if (error === 'Enter a valid email address.') setError(null);
+            }}
             placeholder="Email"
             className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-sm text-white outline-none focus:border-emerald-500"
           />
