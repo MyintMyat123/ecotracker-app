@@ -1,3 +1,4 @@
+```markdown
 # EcoTracker
 
 EcoTracker is a full-stack biodiversity monitoring web application for exploring endangered species, viewing global occurrence data, tracking species watchlists, and receiving conservation-related notifications.
@@ -40,7 +41,7 @@ The project uses a Laravel API backend and a React + TypeScript frontend. Specie
 
 ## Project Structure
 
-```
+```text
 ecotracker-app/
 ├── ecotracker-api/   # Laravel backend API
 └── ecotracker-ui/    # React frontend
@@ -56,7 +57,7 @@ ecotracker-app/
 
 ## Backend Setup
 
-```
+```bash
 cd ecotracker-api
 composer install
 cp .env.example .env
@@ -65,7 +66,7 @@ php artisan key:generate
 
 Update the database settings in `.env`:
 
-```
+```env
 DB_CONNECTION=mysql
 DB_HOST=127.0.0.1
 DB_PORT=3306
@@ -76,26 +77,26 @@ DB_PASSWORD=your_mysql_password
 
 Run migrations and seed the admin user:
 
-```
+```bash
 php artisan migrate
 php artisan db:seed
 ```
 
 Start the backend server:
 
-```
+```bash
 php artisan serve
 ```
 
 The API will run at:
 
-```
+```text
 http://localhost:8000/api
 ```
 
 ## Frontend Setup
 
-```
+```bash
 cd ecotracker-ui
 npm install
 cp .env.example .env
@@ -103,19 +104,19 @@ cp .env.example .env
 
 Make sure the frontend points to the Laravel API:
 
-```
+```env
 VITE_API_BASE_URL=http://localhost:8000/api
 ```
 
 Start the frontend:
 
-```
+```bash
 npm run dev
 ```
 
 The frontend will usually run at:
 
-```
+```text
 http://localhost:5173
 ```
 
@@ -123,7 +124,7 @@ http://localhost:5173
 
 After running the seeders, an admin user is created:
 
-```
+```text
 Email: admin@ecotracker.app
 Password: Admin@123456
 ```
@@ -136,7 +137,7 @@ AI ecological summaries require a Gemini API key.
 
 Add this to `ecotracker-api/.env`:
 
-```
+```env
 GEMINI_API_KEY=your_gemini_api_key
 GEMINI_MODEL=gemini-3.1-flash-lite
 GEMINI_TIMEOUT=45
@@ -151,14 +152,14 @@ Email notifications use Laravel Mail.
 
 For local testing, the default mail logger can be used:
 
-```
+```env
 MAIL_MAILER=log
 EMAIL_NOTIFICATIONS_ENABLED=true
 ```
 
 For SMTP, configure your mail provider:
 
-```
+```env
 MAIL_MAILER=smtp
 MAIL_HOST=smtp.gmail.com
 MAIL_PORT=587
@@ -175,13 +176,13 @@ EcoTracker includes an Artisan command that checks watchlisted species against G
 
 Run manually:
 
-```
+```bash
 php artisan watchlist:monitor
 ```
 
 Limit the number of checked rows:
 
-```
+```bash
 php artisan watchlist:monitor --limit=10
 ```
 
@@ -189,7 +190,7 @@ The scheduler is configured to run monitoring daily at 02:00.
 
 For production, run Laravel's scheduler:
 
-```
+```bash
 php artisan schedule:work
 ```
 
@@ -197,7 +198,7 @@ php artisan schedule:work
 
 ### Authentication
 
-```
+```text
 POST /api/auth/register
 POST /api/auth/login
 GET  /api/auth/me
@@ -206,7 +207,7 @@ POST /api/auth/logout
 
 ### Species
 
-```
+```text
 GET /api/species/search
 GET /api/species/suggest
 GET /api/species/country/{countryName}
@@ -217,7 +218,7 @@ GET /api/species/{usageKey}/tracker
 
 ### Watchlist
 
-```
+```text
 GET    /api/watchlist
 POST   /api/watchlist
 DELETE /api/watchlist/{gbifSpeciesKey}
@@ -225,7 +226,7 @@ DELETE /api/watchlist/{gbifSpeciesKey}
 
 ### Notifications
 
-```
+```text
 GET    /api/notifications
 GET    /api/notifications/unread-count
 GET    /api/notifications/{id}
@@ -237,13 +238,13 @@ DELETE /api/notifications/{id}
 
 ### AI
 
-```
+```text
 POST /api/ai/overview
 ```
 
 ### Admin
 
-```
+```text
 GET    /api/admin/stats
 GET    /api/admin/users
 GET    /api/admin/users/{id}
@@ -256,20 +257,20 @@ POST   /api/admin/notifications/broadcast
 
 Frontend production build:
 
-```
+```bash
 cd ecotracker-ui
 npm run build
 ```
 
 Frontend lint:
 
-```
+```bash
 npm run lint
 ```
 
 Backend tests:
 
-```
+```bash
 cd ecotracker-api
 php artisan test
 ```
