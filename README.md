@@ -1,4 +1,3 @@
-```markdown
 # EcoTracker
 
 EcoTracker is a full-stack biodiversity monitoring web application for exploring endangered species, viewing global occurrence data, tracking species watchlists, and receiving conservation-related notifications.
